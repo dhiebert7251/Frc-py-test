@@ -1,22 +1,17 @@
 [tool.robotpy]
-# RobotPy project configuration. See:
-# https://docs.wpilib.org/en/stable/docs/software/python/pyproject_toml.html
-robotpy_version = "2026.2.2"
+# 2027-alpha tracking only -- READ README.md before assuming this project
+# does anything useful. This is not a continuation of the working port on
+# claude/frc-java-robotpy-port-i012ns.
+#
+# a7 is the newest alpha as of this check. This project's dev environment
+# could only actually install and test a6 -- a7's native wheels weren't
+# published yet for that platform. If `robotpy sync` can't find a7 wheels
+# for your platform, drop back to 2027.0.0a6.
+robotpy_version = "2027.0.0a7"
 
-# Extra RobotPy components (equivalent to `pip install robotpy[...]`)
-components = [
-    "commands2",
-    "apriltag",
-]
-
-# Vendor/third-party libraries, pinned to the versions verified against this port.
-requires = [
-    "robotpy-rev==2026.0.4",
-    "robotpy-navx==2026.0.1.1",
-    "robotpy-pathplannerlib==2026.1.2",
-    "photonlibpy==2026.3.4",
-    "phoenix6==26.3.0",
-]
+# Deliberately no `components` and no vendor `requires` here: commands2
+# (robotpy-commands-v2), REVLib, navX, PathPlanner, PhotonVision, and
+# Phoenix 6 all have no 2027 release yet. See README.md.
 
 [build-system]
 requires = ["setuptools>=42"]

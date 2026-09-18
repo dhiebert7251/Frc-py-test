@@ -1,32 +1,23 @@
-"""Ported from Robot.java.
+"""2027-alpha tracking placeholder -- NOT a working robot. See README.md.
 
-AdvantageKit (org.littletonrobotics.junction) has no RobotPy port, so this
-version drops it in favor of plain wpilib logging, per team decision: use
-commands2.TimedCommandRobot (which schedules CommandScheduler automatically,
-same as Java's CommandScheduler.getInstance().run() call in robotPeriodic)
-plus wpilib.DataLogManager for on-disk + NetworkTables logging. There is no
-AdvantageScope-style replay-log-swap in this version.
+This only proves that a bare wpilib.TimedRobot (no commands2 -- it has no
+2027 release either) constructs and runs under the 2027 alpha HAL. It was
+verified by calling robotInit() directly under a simulated HAL running
+robotpy==2027.0.0a6 (the newest version this project's dev environment could
+actually install).
 """
 
 from __future__ import annotations
 
-from typing import Optional
-
 import wpilib
-from commands2 import Command, TimedCommandRobot
-
-from robotcontainer import RobotContainer
 
 
-class Robot(TimedCommandRobot):
+class Robot(wpilib.TimedRobot):
     def robotInit(self) -> None:
-        wpilib.DataLogManager.start()
-        wpilib.DataLogManager.logNetworkTables(True)
-        wpilib.DriverStation.startDataLog(wpilib.DataLogManager.getLog())
+        wpilib.SmartDashboard.putString("Status", "2027-alpha tracking placeholder -- see README.md")
 
-        self._autonomous_command: Optional[Command] = None
-        # Public (not _-prefixed) so physics.py can reach subsystems for simulation.
-        self.robot_container = RobotContainer()
+    def robotPeriodic(self) -> None:
+        pass
 
     def disabledInit(self) -> None:
         pass
@@ -35,43 +26,15 @@ class Robot(TimedCommandRobot):
         pass
 
     def autonomousInit(self) -> None:
-        self._autonomous_command = self.robot_container.get_autonomous_command()
-
-        if self._autonomous_command is not None:
-            self._autonomous_command.schedule()
+        pass
 
     def autonomousPeriodic(self) -> None:
         pass
 
-    def autonomousExit(self) -> None:
-        if self._autonomous_command is not None:
-            self._autonomous_command.cancel()
-
     def teleopInit(self) -> None:
-        # This makes sure that the autonomous stops running when teleop starts running.
-        if self._autonomous_command is not None:
-            self._autonomous_command.cancel()
-
-        # Re-seed pose from vision at teleop start. Covers practice sessions where auto
-        # is skipped, and catches any drift that accumulated during auto.
-        self.robot_container.initialize_pose()
+        pass
 
     def teleopPeriodic(self) -> None:
-        pass
-
-    def testInit(self) -> None:
-        from commands2 import CommandScheduler
-
-        CommandScheduler.getInstance().cancelAll()
-        print("Hello World")
-
-    def testPeriodic(self) -> None:
-        pass
-
-    def simulationInit(self) -> None:
-        pass
-
-    def simulationPeriodic(self) -> None:
         pass
 
 
