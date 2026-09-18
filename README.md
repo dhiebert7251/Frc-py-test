@@ -155,16 +155,27 @@ that before trusting the simulated motion looks physically reasonable.
 ## 2027 season status
 
 This branch stays on the pinned 2026.x package versions above. A separate
-`2027-alpha-tracking` branch documents what was checked against the current
-2027 alpha (`robotpy==2027.0.0a6`/`a7`): as of that check, **none** of the
-vendor libraries this robot depends on (REV, navX, PathPlanner, PhotonVision,
-Phoenix 6) have a 2027 release, and neither does `robotpy-commands-v2`
-(the `commands2` package) -- so the Command-based architecture this whole
-port relies on isn't available for 2027 yet either. WPILib's own math/geometry
-API is also being restructured for 2027 (flattened namespaces, some classes
-renamed), so this won't be a drop-in version bump once those catch up. See
-that branch's README for the specifics and links to the upstream tracking
-issues.
+`2027-alpha-tracking` branch reviews the official
+[WPILib 2027 yearly changelog](https://docs.wpilib.org/en/latest/docs/yearly-overview/yearly-changelog.html)
+and cross-checks its claims against the actual installable
+`robotpy==2027.0.0a6` package (`a7` cannot be installed on any platform yet --
+its native HAL wheel has no `a7` release at all). Headline findings: **none**
+of the vendor libraries this robot depends on (REV, navX, PathPlanner,
+PhotonVision, Phoenix 6) have a 2027 release, and neither does
+`robotpy-commands-v2` (the `commands2` package this whole port's architecture
+depends on). Beyond that, 2027 is a bigger jump than a version bump: the
+RoboRIO is being replaced by new "SystemCore" hardware (with peripheral
+support changes -- notably SPI/SPI-IMU removal, which is how this robot's
+navX is wired), a large fraction of the Python API is being renamed
+(`robotInit()` removed, `DriverStation` split into `MatchState`/`RobotState`,
+`ChassisSpeeds` split into velocity/acceleration classes, and -- the
+naming-convention specifics -- the changelog claims Python moves to
+snake_case at alpha 6, which direct testing found **not yet true** in the
+actual `a6` package, and all constants/enums move to `ALL_CAPS` at alpha 7,
+unverifiable since `a7` won't install), and the command framework itself is
+being replaced by a structurally different **Commands v3** (coroutine-based,
+Java-only so far -- no Python binding exists for v2 or v3 in 2027). See that
+branch's README for the full findings with sources.
 
 ## Setup
 
