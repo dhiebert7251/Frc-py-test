@@ -122,6 +122,7 @@ class DriveDistanceCommand(Command):
         # boundary where a "human" feet value enters this command -- see
         # constants.METERS_PER_FOOT.
         self._target_distance_meters = distance_feet * METERS_PER_FOOT
+        self._start_distance_meters = 0.0
         self.addRequirements(drivetrain)
 
         self._pid = PIDController(
@@ -135,10 +136,19 @@ class DriveDistanceCommand(Command):
         # initialize() runs exactly once, the instant this command is
         # scheduled (not when it's constructed in __init__, which for
         # autonomous commands happens once at RobotContainer startup,
-        # possibly minutes before the command actually runs). Zeroing the
-        # encoders and the PID controller here means "distance driven" is
-        # always measured from wherever the robot happens to be right now.
-        self._drivetrain.reset_encoders()
+        # possibly minutes before the command actually runs).
+        #
+        # This records the CURRENT encoder reading as a baseline rather
+        # than calling drivetrain.reset_encoders() to zero it -- a
+        # tempting shortcut this command used to take, until DriveTrain
+        # grew a pose estimator (see subsystems/drivetrain.py) that reads
+        # these same encoders every loop. Odometry measures distance
+        # *since its last reset*, so zeroing the encoders out from under
+        # it looks exactly like the robot teleporting back near the
+        # origin -- a real bug this command caused for every leg after the
+        # first in the drive-turn-drive autonomous routine, since fixed by
+        # measuring a relative distance instead of an absolute one.
+        self._start_distance_meters = self._drivetrain.get_average_distance_meters()
         self._pid.reset()
         self._pid.setSetpoint(self._target_distance_meters)
 
@@ -150,7 +160,8 @@ class DriveDistanceCommand(Command):
         # conservatively -- a large distance error (commanding 10 feet from
         # a dead stop) should never be able to demand more than that
         # fraction of full power.
-        output = self._pid.calculate(self._drivetrain.get_average_distance_meters())
+        distance_this_leg = self._drivetrain.get_average_distance_meters() - self._start_distance_meters
+        output = self._pid.calculate(distance_this_leg)
         max_output = DriveTrainConstants.DRIVE_DISTANCE_MAX_OUTPUT
         output = max(-max_output, min(max_output, output))
         self._drivetrain.drive(output, output)

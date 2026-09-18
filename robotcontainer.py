@@ -1,6 +1,6 @@
 """RobotContainer for the teaching-bot proof of concept.
 
-Wires the five subsystems together, sets teleop default commands and
+Wires the six subsystems together, sets teleop default commands and
 button bindings, and builds the autonomous chooser. See README.md for the
 full controller-binding table and subsystem/command maps -- this file is
 meant to be read start-to-finish as the map of the whole robot.
@@ -16,17 +16,22 @@ from commands.elevator_commands import LowerElevatorCommand, RaiseElevatorComman
 from commands.gripper_commands import EjectCommand, IntakeCommand
 from commands.shooter_commands import SpinUpShooterCommand
 from commands.trigger_commands import FireCommand
-from constants import OperatorConstants, TriggerConstants
+from commands.vision_commands import ApproachTagCommand
+from constants import OperatorConstants, TriggerConstants, VisionConstants
 from subsystems.drivetrain import DriveTrain
 from subsystems.elevator import Elevator
 from subsystems.gripper import Gripper
 from subsystems.shooter import Shooter
 from subsystems.trigger import Trigger
+from subsystems.vision import Vision
 
 
 class RobotContainer:
     def __init__(self) -> None:
-        self.drivetrain = DriveTrain()
+        # Vision has to exist before DriveTrain -- DriveTrain's pose
+        # estimator reads from it every loop (see subsystems/drivetrain.py).
+        self.vision = Vision()
+        self.drivetrain = DriveTrain(self.vision)
         self.shooter = Shooter()
         self.trigger = Trigger()
         self.elevator = Elevator()
@@ -72,9 +77,12 @@ class RobotContainer:
     def _configure_bindings(self) -> None:
         """Configure button-to-command bindings.
 
-        Driver (port 0) -- drive only:
+        Driver (port 0) -- drive, plus the two example vision commands:
           Left Y / Right Y = tank drive
           Back              = reset gyro heading to 0 (do this before autonomous!)
+          A                 = approach the example tag, stop 3 ft away facing it
+          X                 = approach the example tag, stop 5 ft away, then
+                              turn 45 degrees right of facing it
 
         Operator (port 1) -- everything else:
           A            = toggle shooter spin-up
@@ -90,6 +98,21 @@ class RobotContainer:
         still gets a full class in this project).
         """
         self._driver_controller.back().onTrue(ResetGyroCommand(self.drivetrain))
+
+        self._driver_controller.a().onTrue(
+            ApproachTagCommand(
+                self.drivetrain, self.vision, VisionConstants.EXAMPLE_TAG_ID, VisionConstants.APPROACH_STANDOFF_FEET
+            )
+        )
+        self._driver_controller.x().onTrue(
+            ApproachTagCommand(
+                self.drivetrain,
+                self.vision,
+                VisionConstants.EXAMPLE_TAG_ID,
+                VisionConstants.APPROACH_AND_TURN_STANDOFF_FEET,
+                VisionConstants.APPROACH_AND_TURN_OFFSET_DEGREES,
+            )
+        )
 
         self._operator_controller.a().toggleOnTrue(SpinUpShooterCommand(self.shooter))
 
