@@ -7,11 +7,11 @@ meant to be read start-to-finish as the map of the whole robot.
 """
 from __future__ import annotations
 
-from commands2 import Command, cmd
+from commands2 import Command
 from commands2.button import CommandXboxController
 
 import autonomous.chooser
-from commands.drivetrain_commands import TeleopDriveCommand
+from commands.drivetrain_commands import ResetGyroCommand, TeleopDriveCommand
 from commands.elevator_commands import LowerElevatorCommand, RaiseElevatorCommand
 from commands.gripper_commands import EjectCommand, IntakeCommand
 from commands.shooter_commands import SpinUpShooterCommand
@@ -67,13 +67,7 @@ class RobotContainer:
         # needs that subsystem -- here, that means "whenever the driver
         # isn't running an autonomous/other DriveTrain command, tank drive
         # from the sticks."
-        self.drivetrain.setDefaultCommand(
-            TeleopDriveCommand(
-                self.drivetrain,
-                lambda: -self._driver_controller.getLeftY(),
-                lambda: -self._driver_controller.getRightY(),
-            )
-        )
+        self.drivetrain.setDefaultCommand(TeleopDriveCommand(self.drivetrain, self._driver_controller))
 
     def _configure_bindings(self) -> None:
         """Configure button-to-command bindings.
@@ -90,17 +84,12 @@ class RobotContainer:
           Right Bumper = raise elevator while held
           Left Bumper  = lower elevator while held
 
-        A note on style: resetting the gyro below is bound as a bare
-        `cmd.runOnce(...)` lambda instead of getting its own Command class.
-        That's a deliberate line to draw, not an inconsistency: a command
-        with real behavior over time -- a loop, a PID controller, a state
-        machine, a timeout -- gets an explicit class in commands/, so that
-        behavior is easy to find and name. A single one-shot action with no
-        state at all isn't worth a whole file for, so it stays inline. If
-        `self.drivetrain.reset_gyro` ever grew logic beyond "call this one
-        method," that would be the moment to promote it to its own class.
+        Every binding below schedules a named Command class -- none of them
+        build a command inline with a lambda, including the one-shot gyro
+        reset (see ResetGyroCommand's docstring for why a one-shot action
+        still gets a full class in this project).
         """
-        self._driver_controller.back().onTrue(cmd.runOnce(self.drivetrain.reset_gyro, self.drivetrain))
+        self._driver_controller.back().onTrue(ResetGyroCommand(self.drivetrain))
 
         self._operator_controller.a().toggleOnTrue(SpinUpShooterCommand(self.shooter))
 

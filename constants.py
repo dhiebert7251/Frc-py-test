@@ -5,7 +5,7 @@ port's constants.py -- see that repo's README "Naming and numbering
 conventions" section. Nothing functional lives here, only numbers/IDs.
 
 Assumptions worth knowing about (see README for the full list):
-  * "Kraken" wasn't specified as X60 vs X44 -- physics.py doesn't model the
+  * The shooter's Kraken is a Kraken X60. physics.py doesn't model the
     shooter at all, so this only matters if someone adds that later.
   * Every gear ratio, motor inversion, limit-switch/beam-break polarity, and
     PID gain below is a starting guess, marked TODO, meant to be corrected
@@ -42,13 +42,21 @@ class DriveTrainConstants:
 
     # Physical dimensions.
     # 6-wheel "drop center" drivetrain: 3 wheels per side, the center wheel
-    # mounted 1/4" higher than the front/back wheels so it only touches the
-    # ground once the frame flexes under load. This is a common way to get
-    # 6-wheel traction/durability while still turning almost like a 4-wheel
-    # skid-steer robot -- the center wheel barely participates in turning
-    # scrub. It doesn't change any of the kinematics math below: WPILib's
-    # DifferentialDriveKinematics only cares about the distance between the
-    # left and right wheels, not how many wheels are on a side.
+    # mounted 1/4" LOWER than the front/back wheels. On a rigid frame that
+    # means the center wheel touches down first, and only ONE of the front
+    # or back wheels shares the ground with it at any moment (whichever end
+    # the robot's weight happens to be biased toward) -- never all 3.
+    # Effectively, each side only ever has 2 real contact points on the
+    # ground, spaced closer together (center-to-front or center-to-back,
+    # WHEEL_CENTER_SPACING_METERS) than the full front-to-back wheelbase
+    # would be. A shorter ground-contact wheelbase means less wheel scrub
+    # (sideways sliding) while turning, which is the entire point of
+    # dropping the center wheel: 6-wheel traction/durability for driving
+    # straight, without paying a 6-wheel-flat drivetrain's full turning
+    # friction penalty. It doesn't change any of the kinematics math below:
+    # WPILib's DifferentialDriveKinematics only cares about the distance
+    # between the left and right wheels (TRACK_WIDTH_METERS), not how many
+    # wheels are on a side or which ones are touching down.
     DROP_CENTER_WHEEL_DROP_METERS = 0.25 * 0.0254  # 1/4 inch, informational only
 
     WHEEL_DIAMETER_METERS = 6.0 * 0.0254  # 6 inches
@@ -94,8 +102,9 @@ class ShooterConstants:
 
     FLYWHEEL_INVERTED = False  # TODO: verify on bench
 
-    # 5 lb flywheel with 4x 4" compliant wheels as the shooting surface.
-    FLYWHEEL_GEAR_RATIO = 1.0  # TODO: confirm -- assumed direct-drive from the Kraken until measured
+    # 5 lb flywheel with 4x 4" compliant wheels as the shooting surface,
+    # driven by a Kraken X60.
+    FLYWHEEL_GEAR_RATIO = 1.0  # TODO: confirm -- assumed direct-drive from the Kraken X60 until measured
     SHOOTER_WHEEL_DIAMETER_METERS = 4.0 * 0.0254
 
     CURRENT_LIMIT = 40  # amps, TalonFX stator limit

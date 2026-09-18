@@ -9,17 +9,24 @@ times) -> isFinished? -> end) visible as four separate methods instead of
 implicit in how a factory function is composed, which is easier to teach to
 someone who hasn't internalized that lifecycle yet.
 
-All three commands below need DriveTrain and nothing else, so they all call
+All four commands below need DriveTrain and nothing else, so they all call
 self.addRequirements(drivetrain) in __init__ -- this is what stops, for
 example, TeleopDriveCommand (the default command) and DriveDistanceCommand
 from both trying to drive the motors at the same time; scheduling one
 automatically interrupts the other.
+
+None of this file uses a lambda or an inline `cmd.xyz(...)` helper anywhere
+-- every command, including the two one-shot ones, is a full class with
+named methods. That costs a little boilerplate (see TeleopDriveCommand vs.
+what it would look like with a lambda, in its own docstring below) but
+means every piece of behavior has a name and a place to put a comment,
+which matters more than brevity for a codebase meant to be read by
+beginners.
 """
 from __future__ import annotations
 
-from typing import Callable
-
 from commands2 import Command
+from commands2.button import CommandXboxController
 from wpimath.controller import PIDController
 
 from constants import DriveTrainConstants, METERS_PER_FOOT
@@ -27,34 +34,70 @@ from subsystems.drivetrain import DriveTrain
 
 
 class TeleopDriveCommand(Command):
-    """The default command: tank drive from two joystick-Y suppliers.
+    """The default command: tank drive read straight from the driver
+    controller's two joystick Y-axes.
 
-    This is the simplest possible Command. It has no state and nothing to
-    set up or clean up, so it only overrides execute() and isFinished() --
-    there's no need to write empty initialize()/end() methods just to have
-    them; Command's base class already provides do-nothing versions.
-    isFinished() always returns False because a default command is meant to
-    run forever, until some other command needs DriveTrain and interrupts it.
+    Takes the controller object itself, rather than two "give me the
+    current left/right stick value" callables -- a common alternative
+    (`Callable[[], float]` arguments filled in with `lambda: ...` at the
+    call site) that avoids naming this class but requires understanding
+    closures/lambdas to read. Calling `driver_controller.getLeftY()`
+    directly, right here, is one idea instead of two.
+
+    This is the simplest possible Command with real behavior. It has no
+    state and nothing to set up or clean up, so it only overrides
+    execute() and isFinished() -- there's no need to write empty
+    initialize()/end() methods just to have them; Command's base class
+    already provides do-nothing versions. isFinished() always returns
+    False because a default command is meant to run forever, until some
+    other command needs DriveTrain and interrupts it.
     """
 
-    def __init__(self, drivetrain: DriveTrain, left_y: Callable[[], float], right_y: Callable[[], float]) -> None:
+    def __init__(self, drivetrain: DriveTrain, driver_controller: CommandXboxController) -> None:
         super().__init__()
         self._drivetrain = drivetrain
-        self._left_y = left_y
-        self._right_y = right_y
+        self._driver_controller = driver_controller
         self.addRequirements(drivetrain)
 
     def execute(self) -> None:
         # execute() runs every ~20ms while this command is scheduled --
         # exactly often enough to keep reading fresh joystick values and
-        # keep driving.
+        # keep driving. Xbox joysticks report "pushed forward" as a
+        # NEGATIVE Y value, which is backwards from how a driver thinks
+        # about "forward" -- the leading minus signs below flip that back.
+        left_y = -self._driver_controller.getLeftY()
+        right_y = -self._driver_controller.getRightY()
         self._drivetrain.drive(
-            DriveTrainConstants.SPEED_SCALE * self._left_y(),
-            DriveTrainConstants.SPEED_SCALE * self._right_y(),
+            DriveTrainConstants.SPEED_SCALE * left_y,
+            DriveTrainConstants.SPEED_SCALE * right_y,
         )
 
     def isFinished(self) -> bool:
         return False
+
+
+class ResetGyroCommand(Command):
+    """Resets the navX gyro's heading to 0 -- bound to the driver's Back
+    button. Do this before every autonomous run, with the robot pointed the
+    way it should be for that run's "0 degrees."
+
+    A one-shot action still gets a full class here, on purpose (see the
+    README's "Where do commands live?" section): initialize() does the
+    actual work, and isFinished() returns True immediately so the command
+    scheduler ends it the very next loop after that -- there's no execute()
+    at all, since there's nothing to repeat.
+    """
+
+    def __init__(self, drivetrain: DriveTrain) -> None:
+        super().__init__()
+        self._drivetrain = drivetrain
+        self.addRequirements(drivetrain)
+
+    def initialize(self) -> None:
+        self._drivetrain.reset_gyro()
+
+    def isFinished(self) -> bool:
+        return True
 
 
 class DriveDistanceCommand(Command):

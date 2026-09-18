@@ -11,7 +11,8 @@ anything with real state, like a PID loop -- lives in commands/, as
 explicit Command classes that call the plain methods defined below. See
 the README's "Where do commands live?" section for the full reasoning
 behind that split, and commands/drivetrain_commands.py for this
-subsystem's three commands (teleop drive, drive-to-distance, turn-to-angle).
+subsystem's four commands (teleop drive, drive-to-distance, turn-to-angle,
+reset gyro).
 
 This subsystem deliberately stops at raw encoder distances and a raw gyro
 heading -- no PathPlanner, no vision, no pose estimator/odometry fusing
