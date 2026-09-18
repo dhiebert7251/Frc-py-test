@@ -14,18 +14,18 @@ behind that split, and commands/drivetrain_commands.py for this
 subsystem's four commands (teleop drive, drive-to-distance, turn-to-angle,
 reset gyro).
 
-This branch adds odometry and kinematics on top of the raw encoder
-distances and raw gyro heading the base teaching-bot project stops at:
-`DifferentialDriveKinematics` (the math relating each wheel's own speed to
-the whole robot's speed/turn rate) and `DifferentialDriveOdometry` (which
-uses that same wheel geometry, plus a running history of encoder + gyro
-readings, to track the robot's estimated (X, Y, heading) position on the
-field over time -- "dead reckoning," the same technique ships have used
-for centuries: no external reference, just "I know my heading and how far
-I've gone, so here's where I must be now"). No vision here yet, so this
-pose can and will drift the longer the robot drives -- fusing a camera's
-AprilTag detections back in to correct that drift is the next lesson,
-picked up on the `teaching-bot-vision` branch.
+The odometry branch this one builds on added `DifferentialDriveKinematics`
+(the math relating each wheel's own speed to the whole robot's speed/turn
+rate) and pure encoder+gyro dead reckoning to track the robot's estimated
+(X, Y, heading) position on the field. This branch replaces that dead
+reckoning with a `DifferentialDrivePoseEstimator`, which does the same
+encoder+gyro integration AND periodically corrects itself using AprilTag
+detections from the Vision subsystem (subsystems/vision.py) -- exactly the
+drift-correction the previous branch's README named as the reason to add
+vision next. `DriveTrain` doesn't do any of the actual camera/AprilTag
+work itself; it just calls `vision.get_best_vision_measurement_if_fresh()`
+every loop and, if there's a fresh one, folds it in via
+`addVisionMeasurement()`.
 """
 from __future__ import annotations
 
@@ -35,24 +35,31 @@ import wpilib.drive
 import wpimath
 from commands2 import Subsystem
 from rev import ResetMode, PersistMode, SparkBaseConfig, SparkMax, SparkMaxConfig
+from wpimath.estimator import DifferentialDrivePoseEstimator
 from wpimath.kinematics import (
     ChassisSpeeds,
     DifferentialDriveKinematics,
-    DifferentialDriveOdometry,
     DifferentialDriveWheelSpeeds,
 )
 from wpimath.geometry import Pose2d, Rotation2d
 
 from constants import DriveTrainConstants, METERS_PER_FOOT
+from subsystems.vision import Vision
 
 
 class DriveTrain(Subsystem):
-    def __init__(self) -> None:
+    def __init__(self, vision: Vision) -> None:
         # Every Subsystem must call its parent's __init__() first. This is
         # what registers the subsystem with the CommandScheduler, which is
         # how the scheduler later knows "these two commands both want
         # DriveTrain, so they can't run at the same time."
         super().__init__()
+
+        # DriveTrain only ever READS from Vision (asking "got a fresh fix?"
+        # every loop) -- it never commands it, so Vision is a plain
+        # reference here, not something DriveTrain calls addRequirements()
+        # on. robotcontainer.py constructs Vision first and passes it in.
+        self._vision = vision
 
         # ---- Motor groupings: 2 physical motors per side, "lead" + "follower" ----
         #
@@ -113,14 +120,18 @@ class DriveTrain(Subsystem):
         # currently uses it.
         self._kinematics = DifferentialDriveKinematics(DriveTrainConstants.TRACK_WIDTH_METERS)
 
-        # DifferentialDriveOdometry is what actually accumulates position
-        # over time: every update() call below feeds it the current gyro
-        # heading and both encoder distances, and it integrates those into
-        # a running (X, Y, heading) estimate -- starting from Pose2d()
-        # (X=0, Y=0, heading=0) here, which is just a stand-in field origin
-        # since this project has no vision yet to seed a real starting
-        # position. See reset_pose() for how a match would set the real one.
-        self._odometry = DifferentialDriveOdometry(
+        # DifferentialDrivePoseEstimator does everything
+        # DifferentialDriveOdometry did (integrate gyro heading + encoder
+        # distance into a running pose, fed every loop below) PLUS accepts
+        # outside corrections via addVisionMeasurement() -- internally, it
+        # keeps a short history of past poses so a vision fix that arrived
+        # slightly late (camera processing takes real time) can be applied
+        # at the moment it was actually true, not the moment it was
+        # received, then replays odometry forward from there. Starting
+        # pose is still Pose2d() (X=0, Y=0, heading=0) -- a stand-in field
+        # origin until reset_pose() sets a real one, exactly as before.
+        self._pose_estimator = DifferentialDrivePoseEstimator(
+            self._kinematics,
             Rotation2d.fromDegrees(self.get_heading_degrees()),
             self.get_left_distance_meters(),
             self.get_right_distance_meters(),
@@ -279,29 +290,27 @@ class DriveTrain(Subsystem):
         the other half of what kinematics is for, alongside odometry."""
         return self._kinematics.toChassisSpeeds(self.get_wheel_speeds())
 
-    # ---- Pose (odometry) ----
+    # ---- Pose (odometry + vision) ----
     #
     # get_pose() is DriveTrain's best current estimate of where the robot
-    # is on the field, as a Pose2d (X meters, Y meters, heading). It comes
-    # entirely from dead reckoning here -- integrating encoder distance and
-    # gyro heading over time, with no outside correction -- so small errors
-    # (wheel scrub, an imperfect track-width measurement) accumulate the
-    # longer the robot drives. That's the tradeoff this branch makes
-    # deliberately, to introduce odometry on its own before adding vision's
-    # correction on top of it.
+    # is on the field, as a Pose2d (X meters, Y meters, heading). It's
+    # still built on the same encoder+gyro dead reckoning as before, but
+    # now periodic() also feeds it fresh AprilTag fixes from Vision when
+    # they're available, correcting the small errors (wheel scrub, an
+    # imperfect track-width measurement) that pure dead reckoning would
+    # otherwise accumulate forever.
 
     def get_pose(self) -> Pose2d:
-        return self._odometry.getPose()
+        return self._pose_estimator.getEstimatedPosition()
 
     def reset_pose(self, pose: Pose2d) -> None:
-        """Tells the odometry "the robot is actually at this pose right
-        now" -- used once at the start of autonomous once a starting
-        position is known. Resets the encoders too: DifferentialDriveOdometry
-        measures distance traveled *since the last reset*, so an old
-        encoder reading and a freshly reset pose would disagree about where
-        "zero" is."""
+        """Tells the pose estimator "the robot is actually at this pose
+        right now" -- used once at the start of autonomous once a starting
+        position is known. Resets the encoders too: distance is measured
+        *since the last reset*, so an old encoder reading and a freshly
+        reset pose would disagree about where "zero" is."""
         self.reset_encoders()
-        self._odometry.resetPosition(
+        self._pose_estimator.resetPosition(
             Rotation2d.fromDegrees(self.get_heading_degrees()), 0.0, 0.0, pose
         )
 
@@ -317,11 +326,23 @@ class DriveTrain(Subsystem):
         # however much the robot moved during the skipped loops, which is
         # exactly the kind of small, silent error that makes dead-reckoned
         # position drift over a match.
-        self._odometry.update(
+        self._pose_estimator.update(
             Rotation2d.fromDegrees(self.get_heading_degrees()),
             self.get_left_distance_meters(),
             self.get_right_distance_meters(),
         )
+
+        # Fold in a fresh AprilTag fix, if Vision has one this loop. This is
+        # the actual drift correction: nothing here has to know HOW the
+        # measurement was computed, only that it's a (pose, timestamp,
+        # confidence) triple the estimator can weigh against its own
+        # dead-reckoned belief.
+        measurement = self._vision.get_best_vision_measurement_if_fresh()
+        if measurement is not None:
+            self._pose_estimator.addVisionMeasurement(
+                measurement.estimated_pose, measurement.timestamp_seconds, measurement.standard_deviations
+            )
+
         self._field.setRobotPose(self.get_pose())
 
         self._telemetry_loop_counter += 1
