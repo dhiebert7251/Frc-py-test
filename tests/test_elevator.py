@@ -2,6 +2,7 @@
 
 import wpilib.simulation
 
+from commands.elevator_commands import LowerElevatorCommand, RaiseElevatorCommand
 from constants import ElevatorConstants
 
 
@@ -16,7 +17,7 @@ def test_raise_command_stops_at_top(control, robot):
         # A command can only be scheduled while the robot is enabled (the
         # default runsWhenDisabled() is False), so enable it first.
         control.step_timing(seconds=0.02, autonomous=False, enabled=True)
-        command = elevator.raise_command()
+        command = RaiseElevatorCommand(elevator)
         command.schedule()
         control.step_timing(seconds=0.1, autonomous=False, enabled=True)
         assert command.isScheduled()  # whileTrue-style: keeps running while held
@@ -35,7 +36,7 @@ def test_lower_command_stops_at_bottom(control, robot):
         assert not elevator.is_at_bottom()
 
         control.step_timing(seconds=0.02, autonomous=False, enabled=True)
-        command = elevator.lower_command()
+        command = LowerElevatorCommand(elevator)
         command.schedule()
         control.step_timing(seconds=0.1, autonomous=False, enabled=True)
         assert command.isScheduled()

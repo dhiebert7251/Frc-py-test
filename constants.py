@@ -14,6 +14,17 @@ Assumptions worth knowing about (see README for the full list):
 
 import math
 
+# WPILib's own math (wpimath) works in meters -- that's not a stylistic
+# choice we get to opt out of, it's baked into DifferentialDriveKinematics,
+# PIDController, etc. But FRC parts, and the humans driving/wrenching on the
+# robot, think in inches/feet. This one constant is the single conversion
+# point between those two worlds: every "feet" value entering this codebase
+# (a command's constructor argument, a dashboard readout) gets multiplied or
+# divided by this, once, right at that boundary -- see
+# commands/drivetrain_commands.py and DriveTrain.periodic() for the two
+# places that actually happen.
+METERS_PER_FOOT = 0.3048
+
 
 class OperatorConstants:
     DRIVER_CONTROLLER_PORT = 0
@@ -57,12 +68,23 @@ class DriveTrainConstants:
     TELEMETRY_PERIOD_LOOPS = 5
     SPEED_SCALE = 0.7
 
-    # Gyro-based turning (PID) -- same pattern as the competition bot's
-    # DriveTrain.turn_to_angle().
+    # Gyro-based turning (PID) -- see commands/drivetrain_commands.py's
+    # TurnToAngleCommand.
     TURN_KP = 0.04
     TURN_KI = 0.0
     TURN_KD = 0.005
     TURN_TOLERANCE_DEGREES = 2.0
+
+    # Distance-based driving (PID) -- see commands/drivetrain_commands.py's
+    # DriveDistanceCommand. KP is deliberately conservative (a large error,
+    # e.g. commanding 10 feet from a standstill, would otherwise demand full
+    # power) and MAX_OUTPUT clamps the controller's output as a second,
+    # independent safety margin on top of that.
+    DRIVE_DISTANCE_KP = 1.5  # TODO: tune on the real robot -- starting point only
+    DRIVE_DISTANCE_KI = 0.0
+    DRIVE_DISTANCE_KD = 0.1
+    DRIVE_DISTANCE_TOLERANCE_METERS = 0.05
+    DRIVE_DISTANCE_MAX_OUTPUT = 0.6  # clamp: never command more than 60% power from this loop
 
 
 class ShooterConstants:
@@ -105,8 +127,10 @@ class TriggerConstants:
     BEAM_BREAK_2_INVERTED = False  # TODO: verify polarity on bench
 
     # Safety timeout in case the limit switch never re-triggers (a jam, a
-    # broken wire) -- without this, fire_command() could run the motor
-    # forever.
+    # broken wire) -- without this, FireCommand could run the motor forever.
+    # Applied as a `.withTimeout()` decorator where FireCommand is bound in
+    # robotcontainer.py, not inside the command itself -- see that file for
+    # why.
     FIRE_TIMEOUT_SECONDS = 2.0
 
 
@@ -142,12 +166,10 @@ class GripperConstants:
 
 
 class Auto:
-    DRIVE_SPEED = 0.5  # [-1, 1] duty cycle while driving to a distance
-    DISTANCE_TOLERANCE_METERS = 0.05
-
-    # The two autonomous routines' actual distances/angle -- named here so
-    # they're easy to find and change without hunting through
-    # autonomous/routines.py.
+    # The two autonomous routines' actual distances/angle, in feet/degrees
+    # (the "human" units) -- named here so they're easy to find and change
+    # without hunting through autonomous/routines.py. Converted to meters
+    # only inside DriveDistanceCommand, right at the WPILib-math boundary.
     DRIVE_FORWARD_ONLY_FEET = 10.0
     DRIVE_TURN_DRIVE_FIRST_LEG_FEET = 5.0
     DRIVE_TURN_DRIVE_TURN_DEGREES = 90.0  # positive = left (CCW), matches WPILib's convention
