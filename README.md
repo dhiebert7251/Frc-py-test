@@ -33,14 +33,18 @@ explained, general Python is assumed.
 ## Physical specs
 
 - **Drivetrain:** 6-wheel "drop center" differential (tank) drive -- 3
-  wheels per side, the center wheel mounted 1/4" higher so it only touches
-  the ground once the frame flexes under load. 2x NEO 2.0 motors per side
-  (4 total) through REV SparkMax controllers, 8.4:1 gearing. 6" diameter,
-  1"-wide wheels; 13" between wheel centers front-to-back per side; 23"
-  between the left and right wheel centerlines.
+  wheels per side, the center wheel mounted 1/4" LOWER than the front/back
+  wheels, so only the center wheel plus one end (front or back) actually
+  touches the ground at a time, not all three. That shortens the effective
+  ground-contact wheelbase and reduces turning friction compared to a
+  6-wheel-flat drivetrain, while keeping 6-wheel traction/durability for
+  driving straight. 2x NEO 2.0 motors per side (4 total) through REV
+  SparkMax controllers, 8.4:1 gearing. 6" diameter, 1"-wide wheels; 13"
+  between wheel centers front-to-back per side; 23" between the left and
+  right wheel centerlines.
 - **Frame:** 32" front-to-back, 28" side-to-side, 118 lb with bumpers.
 - **Shooter:** single 5 lb flywheel, 4x 4" compliant wheels as the shooting
-  surface, driven by one Kraken (TalonFX) motor.
+  surface, driven by one Kraken X60 (TalonFX) motor.
 - **Trigger:** small NEO-driven cam that flicks a game piece into the
   shooter. One limit switch defines the cam's rest ("home") position; two
   beam-break sensors report loading status upstream.
@@ -65,7 +69,7 @@ teaching-bot/
 │   ├── elevator.py                # Elevator
 │   └── gripper.py                 # Gripper
 ├── commands/                    # Every Command, as an explicit class -- see below
-│   ├── drivetrain_commands.py     # TeleopDriveCommand, DriveDistanceCommand, TurnToAngleCommand
+│   ├── drivetrain_commands.py     # TeleopDriveCommand, ResetGyroCommand, DriveDistanceCommand, TurnToAngleCommand
 │   ├── shooter_commands.py         # SpinUpShooterCommand
 │   ├── trigger_commands.py          # FireCommand
 │   ├── elevator_commands.py          # RaiseElevatorCommand, LowerElevatorCommand
@@ -149,13 +153,28 @@ already think fluently in the factory style -- it wasn't, and that
 codebase keeps the terser pattern. Neither is "more correct"; this file
 exists so the choice, and the reasoning, are visible instead of assumed.
 
-One exception, on purpose: `robotcontainer.py` binds gyro-reset to a bare
-`cmd.runOnce(self.drivetrain.reset_gyro, self.drivetrain)` instead of giving
-it a class. A single one-shot action with no state at all isn't worth a
-whole file for -- the line to draw is "does this command have real behavior
-*over time* (a loop, a PID controller, a state machine, a timeout)?" If
-yes, it gets a class here. If it's truly just "call this one method, once,"
-inline is fine. `robotcontainer.py` says this again, right at that binding.
+**No lambdas or inline commands anywhere in this project, including
+one-shot actions.** Two places that would commonly reach for a lambda
+instead get their own class:
+
+- Resetting the gyro (bound to the driver's Back button) is
+  `commands/drivetrain_commands.py`'s `ResetGyroCommand` -- a full class
+  whose `initialize()` does the work and whose `isFinished()` returns
+  `True` immediately, rather than the shorter (but lambda-based)
+  `cmd.runOnce(self.drivetrain.reset_gyro, self.drivetrain)`.
+- `TeleopDriveCommand` takes the driver's `CommandXboxController` object
+  directly and calls `.getLeftY()`/`.getRightY()` on it inside its own
+  `execute()`, rather than taking two `Callable[[], float]` arguments
+  filled in with `lambda: -self._driver_controller.getLeftY()` at the
+  binding site. Same behavior, one idea (a controller object) instead of
+  two (a callable *and* a closure capturing `self`).
+
+Neither rewrite changes what the robot does -- both are exactly the kind of
+"same behavior, more boilerplate, less to understand at once" trade the
+explicit-class choice above already makes. The line for *this* codebase is
+simple: if writing a command would otherwise require a lambda or an inline
+`cmd.xyz(...)` call, give it a class and a name instead, even if that class
+is only two or three lines long.
 
 ## Naming and numbering conventions
 
@@ -195,8 +214,9 @@ student moving between the two codebases doesn't have to relearn anything.
   contains, in lowercase:** `DriveTrain` -> `subsystems/drivetrain.py`;
   its commands -> `commands/drivetrain_commands.py`.
 - **Every Command is an explicit class, in `commands/`, named
-  `<Verb><Noun>Command`:** `TeleopDriveCommand`, `DriveDistanceCommand`,
-  `FireCommand`, `RaiseElevatorCommand`. See
+  `<Verb><Noun>Command` -- including one-shot actions, and never a
+  lambda:** `TeleopDriveCommand`, `ResetGyroCommand`,
+  `DriveDistanceCommand`, `FireCommand`, `RaiseElevatorCommand`. See
   [Where do commands live?](#where-do-commands-live) for why, and how this
   differs from the competition bot's convention.
 - **Private/internal state is `_`-prefixed:** `_target_rpm`,
@@ -236,7 +256,7 @@ visible in the 2027 alpha -- see the next section.
 | Subsystem | File | Purpose | Hardware | Key methods |
 |---|---|---|---|---|
 | **DriveTrain** | `subsystems/drivetrain.py` | Moves the robot (tank/differential drive) | 4x REV SparkMax NEO 2.0 (CAN 20-23), navX2 gyro (SPI/MXP) | `drive()`, `stop()`, `get_left/right_distance_meters()`, `get_left/right_velocity_meters_per_second()`, `get_heading_degrees()`, `reset_gyro()`, `reset_encoders()` |
-| **Shooter** | `subsystems/shooter.py` | Spins the flywheel to a fixed target RPM | 1x Kraken/TalonFX (CAN 30) | `set_target_rpm()`, `stop()`, `get_current_rpm()`, `is_at_target_speed()` |
+| **Shooter** | `subsystems/shooter.py` | Spins the flywheel to a fixed target RPM | 1x Kraken X60/TalonFX (CAN 30) | `set_target_rpm()`, `stop()`, `get_current_rpm()`, `is_at_target_speed()` |
 | **Trigger** | `subsystems/trigger.py` | Fires one game piece into the shooter per cam revolution | 1x NEO/SparkMax (CAN 31), 1 limit switch (DIO 0), 2 beam breaks (DIO 1-2) | `run_cam()`, `stop_cam()`, `is_at_home()`, `has_ball_at_stage_1()`, `has_ball_at_stage_2()` |
 | **Elevator** | `subsystems/elevator.py` | Raises/lowers the 2-stage mast | 1x geared Redline/SparkMax, brushed, no encoder (CAN 40), top/bottom limit switches (DIO 3-4) | `set_speed()`, `stop()`, `is_at_top()`, `is_at_bottom()` |
 | **Gripper** | `subsystems/gripper.py` | Spinning roller intake at the end of the elevator | 1x NEO 550/SparkMax (CAN 41) | `set_speed()`, `stop()` |
@@ -249,7 +269,8 @@ that's the point of the split described in
 
 | Command | Subsystem | Bound as | What it does |
 |---|---|---|---|
-| `TeleopDriveCommand` | DriveTrain | Default command | Tank drive from the driver's two joystick Y-axes |
+| `TeleopDriveCommand` | DriveTrain | Default command | Tank drive read directly from the driver controller's two joystick Y-axes |
+| `ResetGyroCommand` | DriveTrain | `onTrue` | One-shot: resets the navX heading to 0 |
 | `DriveDistanceCommand(feet)` | DriveTrain | Used in autonomous | PID-drives straight to a target distance, in feet |
 | `TurnToAngleCommand(degrees)` | DriveTrain | Used in autonomous | PID-turns to an absolute heading using the navX gyro |
 | `SpinUpShooterCommand` | Shooter | `toggleOnTrue` | Toggle: commands the flywheel to a fixed target RPM, or stops it |
@@ -465,11 +486,9 @@ they're guesses about the *robot* that this code hasn't met yet:
 - `DriveTrainConstants.DRIVE_DISTANCE_KP/KI/KD` and `TURN_KP/KI/KD` -- both
   PID commands' gains are starting points, not measured. Tune distance
   first (drive a known distance, watch overshoot/settling), then heading.
-- The shooter's gear ratio (assumed 1.0, direct-drive from the Kraken) and
-  its `TARGET_RPM`/PID gains -- these are starting points, not measurements.
-- Whether the Kraken is an X60 or X44 (not specified) -- irrelevant to this
-  code today since `physics.py` doesn't model the shooter, but relevant the
-  moment someone adds that simulation.
+- The shooter's gear ratio (assumed 1.0, direct-drive from the Kraken X60)
+  and its `TARGET_RPM`/PID gains -- these are starting points, not
+  measurements.
 - The elevator's raise/lower duty cycles (`RAISE_SPEED`/`LOWER_SPEED`) --
   tuned by feel once the real spring/rope mechanism exists, not calculated.
 
@@ -499,9 +518,10 @@ suggested order for a rookie who knows Python but not FRC:
    introduces closed-loop control (`VelocityVoltage`) and a command with no
    `execute()` at all, contrasted with everything read so far.
 6. **`subsystems/drivetrain.py`** + **`commands/drivetrain_commands.py`** --
-   the most hardware (4 motors + a gyro) and the two PID commands. Read
-   last since it's the longest pair of files, once PID itself and the
-   smaller command patterns are both familiar.
+   the most hardware (4 motors + a gyro) and all four of its commands,
+   including the two PID ones. Read last since it's the longest pair of
+   files, once PID itself and the smaller command patterns are both
+   familiar.
 7. **`robotcontainer.py`** -- ties everything together; should now read as
    "the map of the whole robot" rather than new material.
 8. **`tests/`** -- write one new test for a method that doesn't have one
