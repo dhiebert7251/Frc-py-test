@@ -1,0 +1,23 @@
+[tool.robotpy]
+# RobotPy project configuration. See:
+# https://docs.wpilib.org/en/stable/docs/software/python/pyproject_toml.html
+robotpy_version = "2026.2.2"
+
+# Extra RobotPy components (equivalent to `pip install robotpy[...]`)
+components = [
+    "commands2",
+    "apriltag",
+]
+
+# Vendor/third-party libraries, pinned to the versions verified against this port.
+requires = [
+    "robotpy-rev==2026.0.4",
+    "robotpy-navx==2026.0.1.1",
+    "robotpy-pathplannerlib==2026.1.2",
+    "photonlibpy==2026.3.4",
+    "phoenix6==26.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
