@@ -343,15 +343,23 @@ error, just a command that never runs. Every test in this suite that
 schedules a command directly does one small `step_timing(enabled=True)`
 step first for exactly this reason.
 
-**Another one, specific to testing PID commands**: `python -m robotpy test`
-has no physics engine running (that's only `python -m robotpy sim`, via
-`physics.py`), so commanding a motor in a test never actually moves a
-simulated encoder or gyro reading on its own. `tests/test_drivetrain.py`'s
-PID tests work around this by writing directly onto the simulated
-encoder/gyro (`drivetrain._left_encoder.setPosition(...)`, the navX
-`SimDeviceSim`'s `"Yaw"` value) to fake "the robot got there," the same way
-`test_trigger.py`/`test_elevator.py` poke a `DigitalInput`'s `DIOSim`
-directly to fake a switch closing.
+**Another one, specific to testing PID commands**: `physics.py`'s
+`PhysicsEngine` runs under `python -m robotpy test`, not just under
+`python -m robotpy sim` -- verified directly (an earlier version of this
+file claimed otherwise). Every loop, it recomputes each simulated motor's
+encoder reading (and the navX's simulated yaw) from real motor physics and
+overwrites whatever was there before, including a value a test just poked
+in directly. `tests/test_drivetrain.py`'s PID tests still work despite
+this: each one pokes a sensor (`drivetrain._left_encoder.setPosition(...)`,
+the navX `SimDeviceSim`'s `"Yaw"` value) and then immediately checks that
+SAME loop's `isFinished()`-driven `isScheduled()` result -- the scheduled
+command reads the poked value before physics.py's own recomputation
+overwrites it a moment later. That's a different (and more precise) reason
+than "there's no physics engine running," which this section used to
+claim; see `tests/test_drivetrain.py`'s module docstring for the full
+explanation, and the `teaching-bot-odometry` branch (built on this one)
+for what breaks if you instead try to read a value back out *after* the
+fact, and how to work around it.
 
 ## Simulating (`physics.py`)
 
@@ -422,7 +430,8 @@ someone to reverse-engineer later:
   with a `Field2d` widget. This teaching bot deliberately stops at raw
   `get_left/right_distance_meters()` and `get_heading_degrees()` -- pose
   estimation is a natural *next* lesson once encoders/gyro/PID are
-  comfortable, not a starting one.
+  comfortable, not a starting one. (Picked up on the `teaching-bot-odometry`
+  branch, built on top of this one.)
 - **Every command has the same four-method shape, but not every command
   overrides all four -- and that's informative, not arbitrary.**
   `SpinUpShooterCommand` has no `execute()` at all: Phoenix 6's velocity
