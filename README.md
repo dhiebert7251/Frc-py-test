@@ -399,11 +399,13 @@ step first for exactly this reason.
 **Another one, found while writing this branch's odometry tests, that
 corrects something the previous branch's tests got wrong**: `physics.py`'s
 `PhysicsEngine` actually DOES run under `python -m robotpy test`, not only
-under `python -m robotpy sim` as an earlier version of this file claimed.
-Every loop, it recomputes each simulated motor's encoder reading (and the
-navX's simulated yaw) from real motor physics and overwrites whatever was
-there before -- including a value a test just poked in directly. That's
-harmless for `test_drive_distance_command_finishes_once_target_reached()`/
+under `python -m robotpy sim` as an earlier version of this file claimed
+(including this same README, on the `teaching-bot-poc` branch this one
+builds on -- corrected there too). Every loop, it recomputes each
+simulated motor's encoder reading (and the navX's simulated yaw) from real
+motor physics and overwrites whatever was there before -- including a
+value a test just poked in directly. That's harmless for
+`test_drive_distance_command_finishes_once_target_reached()`/
 `test_turn_to_angle_command_finishes_once_heading_reached()`: they poke a
 sensor and immediately check that same loop's `isFinished()`-driven
 `isScheduled()` result, and the scheduled command reads the poked value
