@@ -19,6 +19,12 @@ from subsystems.elevator import Elevator
 
 class RaiseElevatorCommand(Command):
     def __init__(self, elevator: Elevator) -> None:
+        # `self`, `elevator: Elevator`, and `-> None` all follow the same
+        # pattern explained in commands/gripper_commands.py's
+        # IntakeCommand.__init__ and commands/drivetrain_commands.py's
+        # TeleopDriveCommand.__init__ -- worth reading either of those
+        # first if this shape (a typed parameter, a `-> None` return hint,
+        # `super().__init__()` as the first line) is still new.
         super().__init__()
         self._elevator = elevator
         self.addRequirements(elevator)
@@ -33,6 +39,10 @@ class RaiseElevatorCommand(Command):
         return False
 
     def end(self, interrupted: bool) -> None:
+        # `interrupted: bool` -- see DriveDistanceCommand.end() in
+        # commands/drivetrain_commands.py for what this parameter means and
+        # why end() always receives it, even when (like here) a command
+        # doesn't need to look at its value.
         self._elevator.stop()
 
 

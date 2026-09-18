@@ -105,4 +105,11 @@ class RobotContainer:
         self._operator_controller.leftBumper().whileTrue(LowerElevatorCommand(self.elevator))
 
     def get_autonomous_command(self) -> Command:
+        # `-> Command` is a return type hint like every other one in this
+        # project (`-> None`, `-> bool`, `-> float`), just naming a class
+        # we wrote/imported instead of a Python built-in type. It tells a
+        # reader (and robot.py, which calls this method) that whatever
+        # comes back is an object with the Command lifecycle methods
+        # (initialize/execute/isFinished/end) -- something schedulable,
+        # not a plain number or boolean.
         return self._auto_chooser.getSelected()

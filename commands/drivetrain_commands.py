@@ -54,6 +54,50 @@ class TeleopDriveCommand(Command):
     """
 
     def __init__(self, drivetrain: DriveTrain, driver_controller: CommandXboxController) -> None:
+        # __init__ is a "constructor" -- Python calls this method
+        # automatically whenever something builds a new TeleopDriveCommand,
+        # e.g. `TeleopDriveCommand(self.drivetrain, self._driver_controller)`
+        # in robotcontainer.py. If commands/gripper_commands.py's
+        # IntakeCommand.__init__ is unfamiliar, read its comments first --
+        # it walks through this exact same pattern with just one parameter.
+        # Applied to the two parameters here:
+        #
+        #   * `self` is the new TeleopDriveCommand object under
+        #     construction. Every method on a class takes it as the first
+        #     parameter, and Python supplies it automatically -- it's never
+        #     written at the call site (the call above passes two
+        #     arguments, not three, even though this signature lists
+        #     three parameters counting `self`). Anything saved onto
+        #     `self` here is what execute() and isFinished() below can see
+        #     later, since they receive that same `self` when the
+        #     scheduler calls them.
+        #   * `drivetrain: DriveTrain` -- a parameter named `drivetrain`,
+        #     TYPE-HINTED as `DriveTrain` (the class defined in
+        #     subsystems/drivetrain.py). The `: DriveTrain` part is a hint
+        #     for humans and editors/IDEs, not something Python checks
+        #     while the code runs -- passing, say, a Shooter here wouldn't
+        #     crash on its own, but it WOULD be a bug, and the type hint is
+        #     what makes that bug visible (as an editor warning) before the
+        #     code is ever run.
+        #   * `driver_controller: CommandXboxController` -- the physical
+        #     Xbox controller plugged into port 0 (see
+        #     OperatorConstants.DRIVER_CONTROLLER_PORT in constants.py,
+        #     and robotcontainer.py, where the real controller object is
+        #     actually constructed and passed in here). Storing the whole
+        #     controller object -- instead of, say, two numbers read from
+        #     it once -- is what lets execute() below ask it fresh
+        #     questions (`.getLeftY()`, `.getRightY()`) every single loop.
+        #   * `-> None` after the closing `)` is this METHOD's own return
+        #     type hint: it says __init__ doesn't hand back a value. Python
+        #     constructors are never allowed to return anything other than
+        #     None anyway, so this is really just making that fact visible
+        #     to a reader. Compare isFinished() below, whose `-> bool`
+        #     means it DOES hand back a value (True or False).
+        #   * `super().__init__()` on the next line calls Command's own
+        #     constructor first, before this class's __init__ does
+        #     anything else -- every Command subclass in this project
+        #     starts with this exact line, since skipping it would leave
+        #     the underlying commands2.Command machinery half-set-up.
         super().__init__()
         self._drivetrain = drivetrain
         self._driver_controller = driver_controller
@@ -73,6 +117,13 @@ class TeleopDriveCommand(Command):
         )
 
     def isFinished(self) -> bool:
+        # `-> bool` means this method hands back True or False. The
+        # CommandScheduler checks isFinished() every loop while a command
+        # is running and ends it the instant this returns True. Always
+        # returning False here means "never finish on your own" -- exactly
+        # what a default command needs, since it's meant to keep running
+        # until some OTHER command that also needs DriveTrain gets
+        # scheduled and interrupts this one instead.
         return False
 
 
@@ -89,6 +140,9 @@ class ResetGyroCommand(Command):
     """
 
     def __init__(self, drivetrain: DriveTrain) -> None:
+        # Same __init__ pattern as TeleopDriveCommand above, just with one
+        # parameter instead of two -- see its comments for what `self`,
+        # `drivetrain: DriveTrain`, and `-> None` each mean.
         super().__init__()
         self._drivetrain = drivetrain
         self.addRequirements(drivetrain)
@@ -116,6 +170,10 @@ class DriveDistanceCommand(Command):
     """
 
     def __init__(self, drivetrain: DriveTrain, distance_feet: float) -> None:
+        # `distance_feet: float` is the same `name: type` pattern as
+        # `drivetrain: DriveTrain` above, just with a built-in Python type
+        # (`float`, a decimal number) instead of one of our own classes --
+        # the colon-and-type syntax works exactly the same way either way.
         super().__init__()
         self._drivetrain = drivetrain
         # Feet-to-meters conversion happens exactly once, right here, at the
@@ -159,12 +217,15 @@ class DriveDistanceCommand(Command):
         return self._pid.atSetpoint()
 
     def end(self, interrupted: bool) -> None:
-        # end() runs exactly once, whether isFinished() returned True OR
-        # this command got interrupted (a driver grabbing the joystick
-        # mid-autonomous, the match ending, disabling the robot). It's the
-        # only place guaranteed to run in both cases, which is exactly why
+        # `interrupted: bool` is a parameter the CommandScheduler fills in
+        # for you -- True if this command got cut off early (the driver
+        # grabbed the joystick mid-autonomous, the match ended, the robot
+        # got disabled), False if isFinished() returned True on its own.
+        # end() runs exactly once either way, which is exactly why
         # stopping the motors belongs here rather than only handling the
-        # "finished normally" path.
+        # "finished normally" path -- this command doesn't need to tell
+        # the two cases apart, but end() always receives this parameter
+        # regardless of whether a command reads it.
         self._drivetrain.stop()
 
 

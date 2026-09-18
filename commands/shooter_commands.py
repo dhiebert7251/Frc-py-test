@@ -23,6 +23,10 @@ from subsystems.shooter import Shooter
 
 class SpinUpShooterCommand(Command):
     def __init__(self, shooter: Shooter) -> None:
+        # `shooter: Shooter` / `-> None` -- same parameter and return-type
+        # hint pattern as every other command's __init__ here; see
+        # commands/gripper_commands.py's IntakeCommand if you haven't read
+        # that one yet.
         super().__init__()
         self._shooter = shooter
         self.addRequirements(shooter)

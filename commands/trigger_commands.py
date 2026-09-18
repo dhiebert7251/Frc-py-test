@@ -38,6 +38,14 @@ class FireCommand(Command):
     """
 
     def __init__(self, trigger: Trigger) -> None:
+        # Same `self` / `trigger: Trigger` / `-> None` / `super().__init__()`
+        # pattern as every other command's __init__ in this project -- see
+        # commands/gripper_commands.py's IntakeCommand for the full
+        # explanation. `self._has_left_home = False` here is a plain bool
+        # (True/False) instance attribute, not a parameter -- it's not
+        # something the caller passes in, just a starting value this
+        # object keeps track of for itself, re-set every time initialize()
+        # below runs.
         super().__init__()
         self._trigger = trigger
         self.addRequirements(trigger)
