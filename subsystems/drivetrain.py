@@ -14,10 +14,18 @@ behind that split, and commands/drivetrain_commands.py for this
 subsystem's four commands (teleop drive, drive-to-distance, turn-to-angle,
 reset gyro).
 
-This subsystem deliberately stops at raw encoder distances and a raw gyro
-heading -- no PathPlanner, no vision, no pose estimator/odometry fusing
-them together. Pose estimation is a natural *next* lesson once encoders,
-gyro, and PID are all comfortable on their own, not a starting one.
+This branch adds odometry and kinematics on top of the raw encoder
+distances and raw gyro heading the base teaching-bot project stops at:
+`DifferentialDriveKinematics` (the math relating each wheel's own speed to
+the whole robot's speed/turn rate) and `DifferentialDriveOdometry` (which
+uses that same wheel geometry, plus a running history of encoder + gyro
+readings, to track the robot's estimated (X, Y, heading) position on the
+field over time -- "dead reckoning," the same technique ships have used
+for centuries: no external reference, just "I know my heading and how far
+I've gone, so here's where I must be now"). No vision here yet, so this
+pose can and will drift the longer the robot drives -- fusing a camera's
+AprilTag detections back in to correct that drift is the next lesson,
+picked up on the `teaching-bot-vision` branch.
 """
 from __future__ import annotations
 
@@ -27,6 +35,13 @@ import wpilib.drive
 import wpimath
 from commands2 import Subsystem
 from rev import ResetMode, PersistMode, SparkBaseConfig, SparkMax, SparkMaxConfig
+from wpimath.kinematics import (
+    ChassisSpeeds,
+    DifferentialDriveKinematics,
+    DifferentialDriveOdometry,
+    DifferentialDriveWheelSpeeds,
+)
+from wpimath.geometry import Pose2d, Rotation2d
 
 from constants import DriveTrainConstants, METERS_PER_FOOT
 
@@ -87,6 +102,37 @@ class DriveTrain(Subsystem):
         # at all, because it doesn't need to (that's the whole point of
         # having configured them to follow, above).
         self._driver = wpilib.drive.DifferentialDrive(self._left_lead, self._right_lead)
+
+        # ---- Kinematics and odometry ----
+        #
+        # DifferentialDriveKinematics only needs one number -- the track
+        # width (left-to-right wheel spacing) -- to convert between "each
+        # wheel's own speed" and "the whole robot's forward speed and turn
+        # rate" (a ChassisSpeeds). It doesn't track anything over time by
+        # itself; get_chassis_speeds() below is the only place this project
+        # currently uses it.
+        self._kinematics = DifferentialDriveKinematics(DriveTrainConstants.TRACK_WIDTH_METERS)
+
+        # DifferentialDriveOdometry is what actually accumulates position
+        # over time: every update() call below feeds it the current gyro
+        # heading and both encoder distances, and it integrates those into
+        # a running (X, Y, heading) estimate -- starting from Pose2d()
+        # (X=0, Y=0, heading=0) here, which is just a stand-in field origin
+        # since this project has no vision yet to seed a real starting
+        # position. See reset_pose() for how a match would set the real one.
+        self._odometry = DifferentialDriveOdometry(
+            Rotation2d.fromDegrees(self.get_heading_degrees()),
+            self.get_left_distance_meters(),
+            self.get_right_distance_meters(),
+            Pose2d(),
+        )
+
+        # Field2d is a Shuffleboard/Glass widget that draws the robot as an
+        # icon on a picture of the field, at whatever pose you last gave it
+        # -- registered once here (not every loop) so Shuffleboard doesn't
+        # see it appear/disappear/duplicate.
+        self._field = wpilib.Field2d()
+        wpilib.SmartDashboard.putData("Field", self._field)
 
         # Used by periodic() below to only publish telemetry every Nth loop
         # instead of every ~20ms -- SmartDashboard/NetworkTables traffic adds
@@ -221,12 +267,63 @@ class DriveTrain(Subsystem):
     def reset_gyro(self) -> None:
         self._gyro.reset()
 
+    def get_wheel_speeds(self) -> DifferentialDriveWheelSpeeds:
+        return DifferentialDriveWheelSpeeds(
+            self.get_left_velocity_meters_per_second(), self.get_right_velocity_meters_per_second()
+        )
+
+    def get_chassis_speeds(self) -> ChassisSpeeds:
+        """The whole robot's forward speed (m/s) and turn rate (rad/s),
+        computed from the two wheel speeds via DifferentialDriveKinematics.
+        Nothing in this project currently drives from this -- it's here as
+        the other half of what kinematics is for, alongside odometry."""
+        return self._kinematics.toChassisSpeeds(self.get_wheel_speeds())
+
+    # ---- Pose (odometry) ----
+    #
+    # get_pose() is DriveTrain's best current estimate of where the robot
+    # is on the field, as a Pose2d (X meters, Y meters, heading). It comes
+    # entirely from dead reckoning here -- integrating encoder distance and
+    # gyro heading over time, with no outside correction -- so small errors
+    # (wheel scrub, an imperfect track-width measurement) accumulate the
+    # longer the robot drives. That's the tradeoff this branch makes
+    # deliberately, to introduce odometry on its own before adding vision's
+    # correction on top of it.
+
+    def get_pose(self) -> Pose2d:
+        return self._odometry.getPose()
+
+    def reset_pose(self, pose: Pose2d) -> None:
+        """Tells the odometry "the robot is actually at this pose right
+        now" -- used once at the start of autonomous once a starting
+        position is known. Resets the encoders too: DifferentialDriveOdometry
+        measures distance traveled *since the last reset*, so an old
+        encoder reading and a freshly reset pose would disagree about where
+        "zero" is."""
+        self.reset_encoders()
+        self._odometry.resetPosition(
+            Rotation2d.fromDegrees(self.get_heading_degrees()), 0.0, 0.0, pose
+        )
+
     def periodic(self) -> None:
         # periodic() runs every ~20ms for every subsystem, whether or not a
         # command is currently using it -- this is the right place for
         # "always keep this updated" bookkeeping like telemetry, as opposed
         # to logic that should only happen while a specific command is
         # active (that belongs in that command's execute()).
+
+        # Odometry has to be fed every single loop, not just on the slower
+        # telemetry schedule below -- skipping updates would mean missing
+        # however much the robot moved during the skipped loops, which is
+        # exactly the kind of small, silent error that makes dead-reckoned
+        # position drift over a match.
+        self._odometry.update(
+            Rotation2d.fromDegrees(self.get_heading_degrees()),
+            self.get_left_distance_meters(),
+            self.get_right_distance_meters(),
+        )
+        self._field.setRobotPose(self.get_pose())
+
         self._telemetry_loop_counter += 1
         if self._telemetry_loop_counter >= DriveTrainConstants.TELEMETRY_PERIOD_LOOPS:
             self._telemetry_loop_counter = 0
@@ -246,3 +343,6 @@ class DriveTrain(Subsystem):
                 "DriveTrain/RightVelocityFPS", self.get_right_velocity_meters_per_second() / METERS_PER_FOOT
             )
             wpilib.SmartDashboard.putNumber("DriveTrain/HeadingDeg", self.get_heading_degrees())
+            pose = self.get_pose()
+            wpilib.SmartDashboard.putNumber("DriveTrain/PoseXFeet", pose.X() / METERS_PER_FOOT)
+            wpilib.SmartDashboard.putNumber("DriveTrain/PoseYFeet", pose.Y() / METERS_PER_FOOT)
