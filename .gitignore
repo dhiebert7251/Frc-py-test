@@ -10,3 +10,7 @@ dist/
 .wpilib/wpilib_cfg.json
 *.log
 .DS_Store
+.pytest_cache/
+logs/
+networktables.json
+ctre_sim/

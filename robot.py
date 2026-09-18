@@ -25,7 +25,8 @@ class Robot(TimedCommandRobot):
         wpilib.DriverStation.startDataLog(wpilib.DataLogManager.getLog())
 
         self._autonomous_command: Optional[Command] = None
-        self._robot_container = RobotContainer()
+        # Public (not _-prefixed) so physics.py can reach subsystems for simulation.
+        self.robot_container = RobotContainer()
 
     def disabledInit(self) -> None:
         pass
@@ -34,7 +35,7 @@ class Robot(TimedCommandRobot):
         pass
 
     def autonomousInit(self) -> None:
-        self._autonomous_command = self._robot_container.get_autonomous_command()
+        self._autonomous_command = self.robot_container.get_autonomous_command()
 
         if self._autonomous_command is not None:
             self._autonomous_command.schedule()
@@ -53,7 +54,7 @@ class Robot(TimedCommandRobot):
 
         # Re-seed pose from vision at teleop start. Covers practice sessions where auto
         # is skipped, and catches any drift that accumulated during auto.
-        self._robot_container.initialize_pose()
+        self.robot_container.initialize_pose()
 
     def teleopPeriodic(self) -> None:
         pass

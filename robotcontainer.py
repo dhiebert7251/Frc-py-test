@@ -3,7 +3,9 @@ a "declarative" paradigm, very little robot logic should actually be handled in 
 Robot periodic methods. Instead, the structure of the robot (including subsystems,
 commands, and trigger mappings) should be declared here.
 
-Ported from RobotContainer.java.
+Ported from RobotContainer.java. PathPlanner named-command registration and
+autonomous-chooser construction live in autonomous/; cross-subsystem teleop
+composite commands live in commands/ -- see those modules for why.
 """
 
 from __future__ import annotations
@@ -14,8 +16,10 @@ import wpilib
 from cscore import CameraServer, UsbCamera
 from commands2 import Command, cmd
 from commands2.button import CommandXboxController
-from pathplannerlib.auto import AutoBuilder, NamedCommands
 
+import autonomous.chooser
+import autonomous.named_commands
+import commands.emergency
 from constants import OperatorConstants, VisionConstants
 from subsystems.climber import Climber
 from subsystems.drivetrain import DriveTrain
@@ -51,9 +55,6 @@ class RobotContainer:
         # Operator controller -- all intake and shooting operations (port 1)
         self._operator_controller = CommandXboxController(OperatorConstants.OPERATOR_CONTROLLER_PORT)
 
-        # Autonomous chooser
-        self._do_nothing_auto = cmd.waitUntil(wpilib.DriverStation.isTeleopEnabled).withName("Do Nothing")
-
         # Initialize driver camera. Guard against missing hardware (simulation,
         # camera unplugged) so a missing USB camera does not crash startup.
         try:
@@ -65,9 +66,14 @@ class RobotContainer:
 
         self._configure_default_commands()
 
+        # These must be registered before any auto is run. PathPlanner uses a static map
+        # looked up at auto runtime, so as long as this runs before getAutonomousCommand()
+        # is called (auto init), placement here is safe even though DriveTrain's
+        # constructor already ran AutoBuilder.configure().
+        autonomous.named_commands.register(self.shooter, self.feeder)
+
         # Build auto chooser -- must run after DriveTrain's constructor calls AutoBuilder.configure()
-        self._auto_chooser = AutoBuilder.buildAutoChooser()
-        self._auto_chooser.setDefaultOption("Do Nothing", self._do_nothing_auto)
+        self._auto_chooser, self._do_nothing_auto = autonomous.chooser.build()
         wpilib.SmartDashboard.putData("Auto Chooser", self._auto_chooser)
 
         self._configure_bindings()
@@ -83,91 +89,6 @@ class RobotContainer:
                 self._driver_controller.getRightTriggerAxis,
             )
         )
-
-        # ---- Named Commands for PathPlanner Autos ----
-        # These must be registered before any auto is run. PathPlanner uses a static map
-        # looked up at auto runtime, so as long as these are registered before
-        # getAutonomousCommand() is called (auto init), placement here is safe even
-        # though AutoBuilder.configure() already ran.
-
-        # Shoot sequence:
-        #   Phase 1 -- spin shooter up to distance-resolved RPM, wait for speed (max 2s)
-        #   Phase 2 -- run shooter + feeder together for 8 seconds
-        #   Cleanup -- stop everything
-        def _stop_shoot_sequence(interrupted: bool) -> None:
-            self.shooter.stop_shooter()
-            self.feeder.stop_all()
-
-        NamedCommands.registerCommand(
-            "Shoot5Sec",
-            cmd.sequence(
-                cmd.run(self.shooter.resolve_distance_and_spin, self.shooter)
-                .until(self.shooter.is_at_target_speed)
-                .withTimeout(2.0),
-                cmd.run(
-                    lambda: (self.shooter.resolve_distance_and_spin(), self.feeder.start_feed()),
-                    self.shooter,
-                    self.feeder,
-                ).withTimeout(8.0),
-            ).finallyDo(_stop_shoot_sequence),
-        )
-
-        # Shoot for 8 seconds regardless of speed
-        NamedCommands.registerCommand(
-            "Shoot",
-            cmd.sequence(
-                cmd.run(
-                    lambda: (self.shooter.resolve_distance_and_spin(), self.feeder.start_feed()),
-                    self.shooter,
-                    self.feeder,
-                ).withTimeout(8.0),
-            ).finallyDo(_stop_shoot_sequence),
-        )
-
-        # Spin up only (no feeder) -- use at start of action paths to pre-spin
-        NamedCommands.registerCommand(
-            "SpinUpShooter", cmd.runOnce(self.shooter.resolve_distance_and_spin, self.shooter)
-        )
-
-        # Stop everything
-        def _stop_all() -> None:
-            self.shooter.stop_shooter()
-            self.feeder.stop_all()
-
-        NamedCommands.registerCommand("StopAll", cmd.runOnce(_stop_all, self.shooter, self.feeder))
-
-        # Intake control
-        NamedCommands.registerCommand(
-            "StartIntake", cmd.runOnce(lambda: self.feeder.intake_command().schedule(), self.feeder)
-        )
-
-        NamedCommands.registerCommand("StopIntake", cmd.runOnce(self.feeder.stop_all, self.feeder))
-
-        # 3-second wait (outpost human player reload)
-        NamedCommands.registerCommand("Wait3Sec", cmd.waitSeconds(3.0))
-
-    def _feed_command(self) -> Command:
-        """Feed only -- runs the feeder in feed direction. Requires only Feeder, so it
-        runs concurrently with spinUpCommand (Y button)."""
-        return cmd.run(self.feeder.start_feed, self.feeder).finallyDo(lambda interrupted: self.feeder.stop_all())
-
-    def _stop_all_command(self) -> Command:
-        """Emergency stop -- immediately halts shooter wheel and feeder motors. Has NO
-        subsystem requirements so it is always schedulable regardless of what is running,
-        including commands with kCancelIncoming. It directly cancels any active commands
-        on both subsystems, then stops the motors immediately."""
-
-        def _run() -> None:
-            shooter_command = self.shooter.getCurrentCommand()
-            if shooter_command is not None:
-                shooter_command.cancel()
-            feeder_command = self.feeder.getCurrentCommand()
-            if feeder_command is not None:
-                feeder_command.cancel()
-            self.shooter.stop_shooter()
-            self.feeder.stop_all()
-
-        return cmd.runOnce(_run)
 
     def _configure_bindings(self) -> None:
         """Configure button-to-command bindings.
@@ -201,7 +122,7 @@ class RobotContainer:
 
         self._operator_controller.rightTrigger().whileTrue(self.feeder.shoot_command())
 
-        self._operator_controller.b().onTrue(self._stop_all_command())
+        self._operator_controller.b().onTrue(commands.emergency.stop_all_command(self.shooter, self.feeder))
 
         self._operator_controller.leftBumper().whileTrue(self.feeder.intake_command())
 
