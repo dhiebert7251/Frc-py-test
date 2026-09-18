@@ -147,6 +147,36 @@ def test_reset_pose_seeds_odometry_and_zeroes_encoders(control, robot):
         assert pose.rotation().degrees() == pytest.approx(90.0, abs=0.5)
 
 
+def test_drive_distance_command_does_not_corrupt_pose_between_legs(control, robot):
+    with control.run_robot():
+        drivetrain = robot.robot_container.drivetrain
+
+        first_leg = DriveDistanceCommand(drivetrain, 1.0)  # 1 foot
+        first_leg.initialize()
+
+        # Simulate having actually driven 1 foot for this leg.
+        driven_meters = 1.0 * METERS_PER_FOOT
+        drivetrain._left_encoder.setPosition(driven_meters)
+        drivetrain._right_encoder.setPosition(driven_meters)
+        drivetrain.periodic()
+
+        pose_after_leg_one = drivetrain.get_pose()
+        assert pose_after_leg_one.X() == pytest.approx(driven_meters, abs=0.001)
+
+        # Starting a second DriveDistanceCommand -- exactly what
+        # autonomous/routines.py's drive_turn_drive() does for its second
+        # leg -- used to call drivetrain.reset_encoders(), which snapped
+        # the tracked pose back toward the origin (see
+        # DriveDistanceCommand.initialize()'s docstring for why). It should
+        # now leave the pose exactly where it was.
+        second_leg = DriveDistanceCommand(drivetrain, 1.0)
+        second_leg.initialize()
+        drivetrain.periodic()
+
+        pose_after_second_leg_starts = drivetrain.get_pose()
+        assert pose_after_second_leg_starts.X() == pytest.approx(driven_meters, abs=0.001)
+
+
 def test_chassis_speeds_zero_when_stopped(control, robot):
     with control.run_robot():
         drivetrain = robot.robot_container.drivetrain
