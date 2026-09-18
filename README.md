@@ -9,30 +9,87 @@ framework. It is deliberately **not** a continuation of the working port on
 almost none of that code can run yet, for reasons below, so carrying it over
 unmodified would just be broken code that happens to sit in a repo.
 
-**Bottom line as of this check:** wait. Re-run the check in "How to re-check"
-below every so often; the moment `robotpy-commands-v2` and `robotpy-rev` both
-publish a 2027.x release is the real go/no-go signal for starting a real
-2027 port, not the `robotpy` core version number by itself.
+**Bottom line as of this check:** wait, and expect more than a version bump
+when the time comes. This isn't just vendor libraries catching up -- the
+2027 season replaces the RoboRIO with new "SystemCore" hardware, renames a
+large fraction of the API surface, and is introducing a structurally
+different command framework (Commands v3) rather than extending the one
+this port uses. Re-run the checks below periodically; the moment
+`robotpy-commands-v2` and `robotpy-rev` both publish a 2027.x release is the
+real go/no-go signal for starting a real 2027 port, not the `robotpy` core
+version number by itself.
 
-## What was actually checked
+**Sources for everything below:** the official
+[WPILib 2027 yearly changelog](https://docs.wpilib.org/en/latest/docs/yearly-overview/yearly-changelog.html)
+(quoted directly, not summarized from memory), cross-checked wherever
+possible by installing the actual packages from PyPI and introspecting them
+directly. Each claim below says which of those two it's based on.
 
-Everything below was checked by installing the real packages from PyPI into
-a scratch virtualenv and introspecting them directly -- not inferred from
-changelogs or assumed to follow 2026's API.
+## Naming conventions
 
-### Core `robotpy` package: alpha releases exist
+This was checked specifically because it changes how *every* line of ported
+code reads, not just which packages are pinned.
 
-`pip index versions robotpy` lists (newest first as of this check):
-`2027.0.0a7`, `2027.0.0a6.post1`, `2027.0.0a6`, `2027.0.0a5.post1`,
-`2027.0.0a5`, `2027.0.0a4`, `2027.0.0a2`. `2027.0.0a7`'s native wheels
-(`robotpy-native-wpihal` etc.) weren't published yet for the platform this
-check ran on (linux x86_64) -- `pip install robotpy==2027.0.0a7` failed for
-that reason alone. `2027.0.0a6` installed and ran cleanly, so everything
-below was actually verified against **a6**, not a7. `pyproject.toml` on this
-branch still pins a7 (the newest) per the request that led to this branch;
-if `robotpy sync` can't find a7 wheels for your platform, drop back to a6.
+- **snake_case.** The changelog states: *"Alpha 6: Python functions and
+  variables have been renamed to use snake_case instead of camelCase for
+  consistency with Python naming conventions."* **This could not be
+  confirmed in the actual installable `robotpy==2027.0.0a6` wheel** -- direct
+  testing found `wpilib.SmartDashboard.putString` (camelCase) still present
+  and callable, with no `put_string` snake_case alias, and this held for
+  every other class checked (`Timer`, `TimedRobot`, `Pose2d`). Either the
+  published `a6` wheel lags behind the change described in the changelog, or
+  the changelog bullet refers to something narrower (pure-Python packages
+  like `robotpy_ext`/`pyfrc`, not the compiled `wpilib`/`wpimath` bindings).
+  Re-check this directly against whatever alpha is current when a 2027 port
+  starts -- don't assume snake_case has landed just because a changelog
+  entry mentions "Alpha 6."
+- **ALL_CAPS constants and enum values.** The changelog states: *"Alpha 7:
+  All constants (including enumerated values) have been changed to ALL_CAPS
+  style."* This could **not** be verified directly -- `2027.0.0a7`'s native
+  HAL wheel (`robotpy-native-wpihal`) has no 2027 release on PyPI at all yet
+  (not a platform issue: every other `a7` component installed fine except
+  this one), so `robotpy==2027.0.0a7` cannot currently be installed on any
+  platform, not just the one this check ran on. Expect enums like
+  `SparkLowLevel.MotorType.kBrushless` or
+  `DriverStation.Alliance.kRed` (2026-style, `k`-prefixed) to become
+  something like `MotorType.BRUSHLESS` / `Alliance.RED` once this lands --
+  CTRE's Phoenix 6 Python bindings already use exactly this style today
+  (`InvertedValue.CLOCKWISE_POSITIVE`, `NeutralModeValue.COAST`), so this is
+  WPILib converging on a convention Phoenix 6 got to first, not a novel one.
+- **Verified rewrites that aren't casing changes, but will still break every
+  reference to them:** `testInit`/`testPeriodic` are gone --
+  `wpilib.TimedRobot` at `a6` has `utilityInit`/`utilityPeriodic` instead
+  (changelog: *"Rename 'Test' robot mode to 'Utility'"*, confirmed present by
+  direct `hasattr` check). `Timer.getFPGATimestamp()` no longer exists at all
+  (changelog: *"Rename FPGA clock to monotonic clock"*) -- `Timer` at `a6`
+  has `getTimestamp()` and `getMonotonicTimestamp()` instead, confirmed
+  directly.
 
-### None of the vendor libraries this robot needs have a 2027 release
+## SystemCore: this is bigger than a version bump
+
+The changelog opens with: *"The change from the roboRIO to Systemcore is the
+biggest control system update since the introduction of the cRIO."* This
+matters for this specific robot, not just in the abstract:
+
+- CAN device classes now take a `CANPort` enum instead of a plain integer
+  (*"to disambiguate Systemcore ports from Motioncore ports"*, Alpha 7) --
+  every `CAN_ID` constant in `constants.py` (`LEFT_LEAD_CAN_ID = 20`, etc.)
+  would need to change type, not just get renamed.
+- SystemCore *removes* several RoboRIO peripheral categories outright,
+  including **SPI and SPI IMUs** (the changelog names ADIS16448, ADIS16470,
+  ADXL345, ADXRS450 specifically) and analog gyro. This robot's navX is
+  wired over SPI (`navx.AHRS.NavXComType.kMXP_SPI` in
+  `subsystems/drivetrain.py` on the 2026 port) -- whether navX support
+  survives on SystemCore, and in what form, is an open question this
+  changelog doesn't answer for that specific sensor family.
+- Relay, analog output, DMA, built-in accelerometer, digital glitch filter,
+  interrupts, counter, ultrasonic, analog trigger, Nidec Brushless, Servo,
+  and Jaguar support are also removed. None of those are used by this robot
+  today, so they're listed here only as evidence of how much of the
+  RoboRIO-era hardware API doesn't carry forward at all, versus just being
+  renamed.
+
+## No vendor library this robot depends on has a 2027 release
 
 Checked via `pip index versions <pkg>` for each -- latest version of every
 one is still 2026.x:
@@ -45,51 +102,85 @@ one is still 2026.x:
 | `robotpy-pathplannerlib` | 2026.1.2 | PathPlanner autonomous |
 | `photonlibpy` | 2026.3.4 | PhotonVision AprilTag pose estimation |
 | `phoenix6` | 26.3.0 | CTRE TalonFX (shooter motor) |
-| `robotpy-apriltag` | 2026.2.2 | AprilTag field layouts (used even without PhotonVision, for `Vision.py`'s field bounds check) |
+| `robotpy-apriltag` | 2026.2.2 | AprilTag field layouts |
 | `robotpy-cscore` | 2026.2.2 | Camera streaming |
 
-`robotpy-rev`'s own issue tracker confirms this isn't an oversight:
-[robotpy-rev#91 "snake_case upgrade"](https://github.com/robotpy/robotpy-rev/issues/91)
+The changelog itself explains why for two of these: *"The WPILib AprilTag
+and CameraServer libraries have been moved to vendordeps"* -- so
+`robotpy-apriltag`/`robotpy-cscore` aren't just lagging, they're being
+restructured to ship the same way REV/CTRE/PathPlanner already do, as
+separate vendor packages outside core WPILib.
+
+`robotpy-rev`'s own issue tracker confirms the rest isn't an oversight
+either: [robotpy-rev#91 "snake_case upgrade"](https://github.com/robotpy/robotpy-rev/issues/91)
 says a 2027 branch exists locally but is blocked on WPILib's alpha-7
-stabilizing first, because of breaking changes. There's no equivalent
-public tracking issue for the other libraries, but the same blocker likely
-applies to all of them -- they all bind against WPILib's C++ core, which is
-what's still moving.
+stabilizing first, because of breaking changes. There's no equivalent public
+tracking issue for the other libraries, but the same blocker likely applies
+to all of them -- they all bind against WPILib's C++ core, which the
+changelog shows is still moving significantly release to release.
 
-### WPILib's own API is being restructured, not just bumped
+## The command framework itself is being replaced, not upgraded
 
-Confirmed directly against the installed `2027.0.0a6` packages:
+The changelog introduces **Commands v3** at Alpha 5 for Java: *"Add Commands
+v3 framework... Design Document... port of the Hatchbot example to Commands
+v3."* Later Commands v3 entries describe a coroutine-based design (*"Add
+compile-time checks for unsafe or incorrect coroutine usage,"*
+*"Coroutine.waitUntil overload with timeout,"* *"declarative state machine
+API on top of commands v3"*) -- structurally different from `commands2`'s
+Subsystem/Command/CommandScheduler model, not an incremental version bump.
+The VS Code extension changelog adds *"Support Commandsv3 vendordep"* at
+Alpha 5, which is Java/Gradle-ecosystem tooling. **There is no mention
+anywhere in this changelog, or on PyPI, of a Python binding for either
+Commands v2 or v3 for 2027** -- when Python command-based support does
+arrive for 2027, there's no indication yet it will be a straightforward
+"port commands2 forward"; it may target v3's different model instead.
 
-- **`wpimath` lost its submodules.** In 2026, geometry/kinematics/estimator/
-  controller classes live in `wpimath.geometry`, `wpimath.kinematics`, etc.
-  In 2027 alpha, they're all flattened directly onto `wpimath` --
-  `wpimath.Pose2d` instead of `wpimath.geometry.Pose2d`, and there is no
-  `wpimath.geometry` module at all anymore.
-- **Renamed classes.** `ChassisSpeeds` is now split into `ChassisVelocities`
-  and `ChassisAccelerations`; `DifferentialDriveWheelSpeeds` is now
-  `DifferentialDriveWheelVelocities`.
-- **`wpilib.drive` is gone.** No `DifferentialDrive`, `MecanumDrive`, or
-  `RobotDriveBase` -- the helper classes `DriveTrain.py` uses for
-  `tankDrive()` don't exist in this alpha at all.
-- **Smaller removals already visible:** e.g.
-  `DriverStation.silenceJoystickConnectionWarning()` no longer exists.
-- **Not yet reproduced here, but reported upstream:** the WPILib yearly
-  changelog for 2027 states `SmartDashboard`, `SendableChooser`, and
-  `Sendable` are being replaced by new `Telemetry` and `Tunables` APIs.
-  `SmartDashboard`/`SendableChooser` still exist as of `a6` (this was
-  checked directly), so that change likely lands in `a7` or later --
-  unverified here since `a7`'s native wheels weren't installable in this
-  environment.
-- **Java-side context:** a real team's 2027 alpha repo
-  ([Drew-Robotics/2027beta](https://github.com/Drew-Robotics/2027beta),
-  Team 8852, Java) describes their base as "WPILib 2027 alpha, Java 25, and
-  Commands v3" -- i.e. the *Java* command framework is also being replaced,
-  not just extended. Whatever RobotPy eventually ships for 2027 may not be
-  a simple "commands2, but for 2027" upgrade.
+## Other confirmed changes worth knowing about before porting
 
-None of this is a criticism of RobotPy or WPILib -- alpha software moving
-between alphas is exactly what "currently alpha testing" means. It's just
-why this branch stops at "here's what's blocked," not "here's a 2027 port."
+Quoted or paraphrased directly from the changelog, grouped by how much they'd
+touch this specific codebase:
+
+- **`robotInit()` is removed.** *"Alpha 5: Remove `robotInit()`. Use the
+  `Robot()` constructor instead."* Every subsystem's construction in this
+  port's `robot.py`/`robotcontainer.py` happens inside `robotInit()`.
+- **`Rotation2d` angles are now wrapped.** *"Silent Breaking:
+  `Rotation2d`'s `getRadians()`, `getDegrees()`, and `getRotations()`
+  methods now return a wrapped angle... Those who don't want wrapping should
+  use `double` or `Angle` instead of `Rotation2d`."* This port's
+  `DriveTrain.get_heading()` and the `physics.py` yaw-accumulator both treat
+  `Rotation2d`/heading degrees as continuous values today.
+- **`ChassisSpeeds` split into `ChassisVelocities` and
+  `ChassisAccelerations`.** *"Use immutable member functions in
+  `ChassisSpeeds`"* and *"Add `ChassisAccelerations` and drivetrain
+  accelerations classes."* Matches what direct testing against `a6` already
+  showed (no `wpimath.ChassisSpeeds`, both replacement classes present).
+- **`DriverStation` is split into `MatchState` and `RobotState`.**
+  Confirmed directly: at `a6`, `wpilib.DriverStation` has only 3 methods
+  left (`startDataLog` and two event-handle methods). `getAlliance()`,
+  `getMatchTime()` etc. moved to `MatchState`; `isAutonomous()`,
+  `isEnabled()`, `isUtility()` (renamed from `isTest()`) etc. moved to
+  `RobotState`. Every subsystem in this port calls
+  `wpilib.DriverStation.getAlliance()`/`.isTest()`/`.isAutonomous()`
+  directly.
+- **Motor control API changes.** *"Rename `MotorController` `set()` to
+  `setThrottle()`"* and *"Remove `MotorController::StopMotor()`. Use
+  `MotorController::Disable()` instead."* Every subsystem's `.set(...)`
+  calls on SparkMax/TalonFX-style motor objects would need updating.
+- **Gamepad classes are in flux even within the alpha cycle.** *"Alpha 5:
+  Replace individual gamepad classes (e.g. `XboxController`, `PS4Controller`
+  ...) with a single `Gamepad` class. Alpha 7 adds back support for
+  individual gamepad classes."* `CommandXboxController`'s 2027 equivalent
+  isn't settled yet even in Java/C++, let alone in RobotPy.
+- **SmartDashboard is being fully removed, not just deprecated.** Beyond the
+  Telemetry/Tunables replacement noted above, there's a separate top-level
+  warning: *"SmartDashboard has been removed for 2027 due to its usage of
+  Network Tables v3."* Every subsystem in this port calls
+  `wpilib.SmartDashboard.put*` for telemetry.
+- **Shuffleboard, PathWeaver, and RobotBuilder are all removed outright**
+  (lack of a maintainer, NT3 usage, and lack of swerve support /
+  maintenance burden, respectively) -- not relevant to this port directly
+  since none of those are used, but worth knowing if anyone on the team
+  uses them for dashboarding today.
 
 ## How to re-check
 
@@ -103,27 +194,36 @@ pip index versions robotpy-commands-v2 robotpy-rev robotpy-navx \
 
 The moment `robotpy-commands-v2` and `robotpy-rev` (the two most
 load-bearing for this robot) show a `2027.x` version, that's the real
-signal to start a proper 2027 port -- at that point it's worth re-reading
-this file's WPILib-restructuring notes above, since those affect every
-subsystem file, and re-verifying each vendor API against the installed
-packages the same way the 2026 port on
+signal to start a proper 2027 port. At that point, re-read the current
+[WPILib yearly changelog](https://docs.wpilib.org/en/latest/docs/yearly-overview/yearly-changelog.html)
+in full (a lot will have changed since this check -- alphas 2 through 7
+alone added hundreds of entries), and re-verify every claim above directly
+against whatever alpha is current the same way this check did, the same way
+the 2026 port on
 [`claude/frc-java-robotpy-port-i012ns`](../../tree/claude/frc-java-robotpy-port-i012ns)
-was (see that branch's README "Verification" section).
+verified its APIs (see that branch's README "Verification" section) --
+don't assume a changelog bullet has actually shipped in the installable
+package just because it's listed under a given alpha number.
 
 ## What's on this branch
 
 Just enough to prove *something* runs under the 2027 alpha:
 
 - `pyproject.toml` -- pinned to `robotpy==2027.0.0a7` (no vendor `requires`,
-  no `commands2`/`apriltag` components -- none have a 2027 release).
+  no `commands2`/`apriltag` components -- none have a 2027 release; note
+  `a7` currently cannot actually be installed on any platform because
+  `robotpy-native-wpihal` has no `a7` release -- see above).
 - `robot.py` -- a bare `wpilib.TimedRobot` subclass with no subsystems, no
   `commands2` (it has no 2027 release either). This was constructed and
   had `robotInit()` called successfully under a simulated HAL running
-  `robotpy==2027.0.0a6`.
+  `robotpy==2027.0.0a6`, the newest version actually installable.
 
 Everything else from the 2026 port (`subsystems/`, `commands/`,
 `autonomous/`, `tests/`, `physics.py`, `robotcontainer.py`, `constants.py`,
 `vision_measurement.py`, `result.py`) was removed from this branch rather
 than left in a broken, unimportable state -- they all depend on packages
-that don't exist for 2027 yet. They're intact on
+that don't exist for 2027 yet, and several of the WPILib APIs they call
+directly (`DriverStation.getAlliance()`/`.isTest()`, `SmartDashboard.put*`,
+`robotInit()`, `ChassisSpeeds`) are confirmed gone or renamed in the alpha
+already. They're intact on
 [`claude/frc-java-robotpy-port-i012ns`](../../tree/claude/frc-java-robotpy-port-i012ns).
