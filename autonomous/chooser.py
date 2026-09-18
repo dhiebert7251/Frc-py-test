@@ -1,37 +1,21 @@
-"""Autonomous chooser construction.
-
-Wraps PathPlanner's AutoBuilder-generated chooser with a "Do Nothing"
-default, split out of RobotContainer to mirror how established RobotPy
-teams keep autonomous-only wiring separate from teleop bindings. Must be
-called after DriveTrain's constructor has already run
-AutoBuilder.configure() -- buildAutoChooser() raises otherwise.
+"""Builds the SmartDashboard autonomous-routine chooser for the teaching-bot
+proof of concept: two real routines plus a "Do Nothing" default.
 """
-
 import wpilib
-from commands2 import Command, cmd
-from pathplannerlib.auto import AutoBuilder
+from commands2 import cmd
+
+import autonomous.routines
+from subsystems.drivetrain import DriveTrain
 
 DO_NOTHING_NAME = "Do Nothing"
+DRIVE_FORWARD_NAME = "Drive Forward 10 ft"
+DRIVE_TURN_DRIVE_NAME = "Drive 5ft, Turn Left 90, Drive 3ft"
 
 
-def build() -> tuple[wpilib.SendableChooser, Command]:
-    """Returns (chooser, do_nothing_auto).
-
-    AutoBuilder.buildAutoChooser() raises if AutoBuilder.configure() didn't
-    succeed (e.g. no deploy/pathplanner/settings.json yet -- DriveTrain
-    already catches that and logs a warning, matching the Java source).
-    The Java source calls the equivalent of buildAutoChooser() unguarded
-    right after, which would crash RobotContainer's constructor under that
-    same condition; this falls back to a chooser offering only "Do Nothing"
-    instead, since the whole point of the fallback (and of this port's test
-    suite) is for the robot to still come up when PathPlanner isn't set up.
-    """
-    do_nothing_auto = cmd.waitUntil(wpilib.DriverStation.isTeleopEnabled).withName(DO_NOTHING_NAME)
-
-    if AutoBuilder.isConfigured():
-        chooser = AutoBuilder.buildAutoChooser()
-    else:
-        chooser = wpilib.SendableChooser()
-    chooser.setDefaultOption(DO_NOTHING_NAME, do_nothing_auto)
-
-    return chooser, do_nothing_auto
+def build(drivetrain: DriveTrain) -> wpilib.SendableChooser:
+    chooser = wpilib.SendableChooser()
+    chooser.setDefaultOption(DO_NOTHING_NAME, cmd.none())
+    chooser.addOption(DRIVE_FORWARD_NAME, autonomous.routines.drive_forward_only(drivetrain))
+    chooser.addOption(DRIVE_TURN_DRIVE_NAME, autonomous.routines.drive_turn_drive(drivetrain))
+    wpilib.SmartDashboard.putData("Auto Chooser", chooser)
+    return chooser

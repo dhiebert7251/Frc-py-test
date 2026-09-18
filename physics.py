@@ -1,31 +1,18 @@
 """Simulation physics model for `python -m robotpy sim`.
 
-RobotPy loads this file automatically (by convention, a `physics.py` at the
-project root next to robot.py) and constructs `PhysicsEngine` once the real
-robot's hardware objects exist, so it can read what they were commanded to
-do and feed a simulated physical response back.
+Only the drivetrain is modeled -- same scope decision as the competition
+bot's physics.py. Shooter, Trigger, Elevator, and Gripper dynamics aren't
+simulated; their telemetry in sim reflects commanded setpoints, not a
+physical response.
 
-Only the drivetrain is modeled here: the two REV SparkMax drive motors are
-read via rev.SparkMaxSim and converted to chassis speeds with the same
-DifferentialDriveKinematics the real DriveTrain uses, then fed to the field
-simulator so Field2d/PathPlanner-in-sim has a real pose to work with. The
-navX gyro is driven the same way real hardware reports it: through its
-SimDevice ("navX-Sensor[4]" for the MXP SPI port), not by writing to the AHRS
-object directly.
-
-Not modeled: Shooter flywheel and Feeder motor dynamics -- those will show
-their commanded setpoints in sim rather than a simulated physical response
-(e.g. Shooter.get_current_rpm() will read back whatever RPM the Phoenix 6
-simulated velocity signal defaults to, not a real flywheel spin-up curve).
-
-This file could not be exercised through the full `robotpy sim` harness in
-the environment this port was written in (no display/GUI backend available)
--- the underlying pieces (rev.SparkMaxSim, PhysicsInterface.drive(), the
-navX SimDevice mechanism) were each verified individually against the
-installed packages, but the assembled whole should be smoke-tested with
-`python -m robotpy sim` before being trusted.
+The REV NEO 2.0 has no built-in DCMotor factory in wpimath as of the 2026
+season, so it is hand-built below from REV's published spec sheet
+(https://www.revrobotics.com/rev-21-1653/): free speed 5676 RPM (same as the
+original NEO), stall torque 3.75 N*m, stall current 150 A, free current
+1.8 A. The raw DCMotor(nominalVoltage, stallTorque, stallCurrent,
+freeCurrent, freeSpeed, numMotors) constructor was verified directly against
+the installed 2026 wpimath package before use here.
 """
-
 from __future__ import annotations
 
 import math
@@ -38,31 +25,32 @@ from wpimath.system.plant import DCMotor
 
 from constants import DriveTrainConstants
 
+NEO_2_MOTOR = DCMotor(
+    12.0,  # nominal voltage
+    3.75,  # stall torque, N*m
+    150.0,  # stall current, A
+    1.8,  # free current, A
+    DCMotor.NEO(1).freeSpeed,  # free speed, rad/s -- same as the original NEO
+    1,  # number of motors modeled
+)
+
 
 class PhysicsEngine:
     def __init__(self, physics_controller: PhysicsInterface, robot) -> None:
         self.physics_controller = physics_controller
 
         drivetrain = robot.robot_container.drivetrain
-        neo = DCMotor.NEO(1)
-
-        # Mirrors what the real SparkMax controllers report in hardware mode.
-        self._left_sim = rev.SparkMaxSim(drivetrain._left_motor_lead, neo)
-        self._right_sim = rev.SparkMaxSim(drivetrain._right_motor_lead, neo)
+        self._left_sim = rev.SparkMaxSim(drivetrain._left_lead, NEO_2_MOTOR)
+        self._right_sim = rev.SparkMaxSim(drivetrain._right_lead, NEO_2_MOTOR)
 
         self._kinematics = DifferentialDriveKinematics(DriveTrainConstants.TRACK_WIDTH_METERS)
 
-        # Wheel surface speed (m/s) at 100% duty cycle: free speed (rad/s) geared
-        # down by GEAR_RATIO, times wheel radius.
         self._max_wheel_speed_mps = (
-            neo.freeSpeed
+            NEO_2_MOTOR.freeSpeed
             / DriveTrainConstants.GEAR_RATIO
             * (DriveTrainConstants.WHEEL_DIAMETER_METERS / 2.0)
         )
 
-        # navX yaw is driven through its SimDevice -- the same mechanism the real
-        # sensor uses to report Yaw over NetworkTables. NavXComType.kMXP_SPI
-        # registers as SPI port 4, hence "navX-Sensor[4]".
         navx_sim = wpilib.simulation.SimDeviceSim("navX-Sensor[4]")
         navx_sim.getBoolean("Connected").set(True)
         self._navx_yaw_sim = navx_sim.getDouble("Yaw")
@@ -81,13 +69,10 @@ class PhysicsEngine:
 
         self.physics_controller.drive(chassis_speeds, tm_diff)
 
-        # DriveTrain.get_heading() negates the raw navX angle (see the comment
-        # there), so drive the sim yaw with the negated chassis rotation to match.
+        # DriveTrain.get_heading_degrees() negates the raw navX angle, so drive
+        # the sim yaw with the negated chassis rotation to match.
         self._yaw_degrees -= math.degrees(chassis_speeds.omega) * tm_diff
         self._navx_yaw_sim.set(self._yaw_degrees)
 
-        # Advance each SparkMaxSim's own position/velocity bookkeeping so
-        # DriveTrain.get_left_distance_meters()/get_wheel_speeds() (which read
-        # back through the encoder sim) reflect this same motion.
         self._left_sim.iterate(left_speed, 12.0, tm_diff)
         self._right_sim.iterate(-right_speed, 12.0, tm_diff)

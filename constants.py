@@ -1,12 +1,18 @@
-"""Robot-wide numerical/boolean constants.
+"""Robot-wide numerical/boolean constants for the teaching-bot proof of concept.
 
-Ported from Constants.java. Constants are grouped into namespace classes the
-same way as the original — this class should not contain anything functional.
+One namespace class per subsystem, same convention as the competition
+port's constants.py -- see that repo's README "Naming and numbering
+conventions" section. Nothing functional lives here, only numbers/IDs.
+
+Assumptions worth knowing about (see README for the full list):
+  * "Kraken" wasn't specified as X60 vs X44 -- physics.py doesn't model the
+    shooter at all, so this only matters if someone adds that later.
+  * Every gear ratio, motor inversion, limit-switch/beam-break polarity, and
+    PID gain below is a starting guess, marked TODO, meant to be corrected
+    once the real robot exists to test against.
 """
 
 import math
-
-from wpimath.geometry import Pose2d, Rotation2d, Rotation3d, Transform3d, Translation3d
 
 
 class OperatorConstants:
@@ -14,181 +20,135 @@ class OperatorConstants:
     OPERATOR_CONTROLLER_PORT = 1
 
 
-class ClimberConstants:
-    pass
-
-
 class DriveTrainConstants:
-    # CAN IDs
+    # CAN IDs -- 4x NEO 2.0 via REV SparkMax, 2 per side (lead + follower).
     LEFT_LEAD_CAN_ID = 20
-    RIGHT_LEAD_CAN_ID = 22
     LEFT_FOLLOW_CAN_ID = 21
+    RIGHT_LEAD_CAN_ID = 22
     RIGHT_FOLLOW_CAN_ID = 23
 
-    # Motor config
     CURRENT_LIMIT = 60  # amps
 
-    # Pose initialization — vision measurements up to this many seconds old are
-    # accepted when seeding the pose at auto/teleop init. More generous than the
-    # in-match freshness window because any recent fix beats defaulting to field origin.
-    POSE_INIT_MAX_VISION_AGE_SECONDS = 5.0
+    # Physical dimensions.
+    # 6-wheel "drop center" drivetrain: 3 wheels per side, the center wheel
+    # mounted 1/4" higher than the front/back wheels so it only touches the
+    # ground once the frame flexes under load. This is a common way to get
+    # 6-wheel traction/durability while still turning almost like a 4-wheel
+    # skid-steer robot -- the center wheel barely participates in turning
+    # scrub. It doesn't change any of the kinematics math below: WPILib's
+    # DifferentialDriveKinematics only cares about the distance between the
+    # left and right wheels, not how many wheels are on a side.
+    DROP_CENTER_WHEEL_DROP_METERS = 0.25 * 0.0254  # 1/4 inch, informational only
 
-    # Driving
+    WHEEL_DIAMETER_METERS = 6.0 * 0.0254  # 6 inches
+    WHEEL_WIDTH_METERS = 1.0 * 0.0254  # 1 inch, informational only (not used in kinematics)
+    WHEEL_CIRCUMFERENCE_METERS = WHEEL_DIAMETER_METERS * math.pi
+
+    GEAR_RATIO = 8.4
+
+    TRACK_WIDTH_METERS = 23.0 * 0.0254  # left-to-right wheel center distance
+    WHEEL_CENTER_SPACING_METERS = 13.0 * 0.0254  # front-mid and mid-back spacing, per side
+
+    ROBOT_LENGTH_METERS = 32.0 * 0.0254  # front-to-back, bumpers included
+    ROBOT_WIDTH_METERS = 28.0 * 0.0254  # side-to-side, bumpers included
+    ROBOT_MASS_KG = 118.0 * 0.45359237  # with bumpers
+
     JOYSTICK_DEADBAND = 0.05
     TELEMETRY_PERIOD_LOOPS = 5
-
-    # Physical dimensions
-    GEAR_RATIO = 8.46
-    WHEEL_DIAMETER_METERS = 0.1524  # 6 inches
-    WHEEL_CIRCUMFERENCE_METERS = WHEEL_DIAMETER_METERS * math.pi
-    TRACK_WIDTH_METERS = 0.546
-
     SPEED_SCALE = 0.7
 
-
-class IntakeConstants:
-    pass
+    # Gyro-based turning (PID) -- same pattern as the competition bot's
+    # DriveTrain.turn_to_angle().
+    TURN_KP = 0.04
+    TURN_KI = 0.0
+    TURN_KD = 0.005
+    TURN_TOLERANCE_DEGREES = 2.0
 
 
 class ShooterConstants:
-    # CAN IDs
-    SHOOTER_MOTOR_ID = 30  # TalonFX (Phoenix 6) — shooter wheel
-    INTAKE_MOTOR_ID = 31  # SparkMAX — intake roller (primary + secondary linked, CCW only)
-    TRIGGER_MOTOR_ID = 32  # SparkMAX — trigger/hopper (bidirectional)
+    # CAN ID: 30s decade, same subsystem-family convention as the
+    # competition bot (Shooter/Trigger both feed the same game piece path).
+    FLYWHEEL_MOTOR_ID = 30
 
-    # Motor inversion — verify polarity on bench, flip here if wrong
-    # Intake roller:  positive set() should = CCW (into robot)
-    # Trigger motor:  positive set() should = CW  (hopper -> shooter)
-    SHOOTER_INVERTED = False  # TODO: verify on bench
-    INTAKE_MOTOR_INVERTED = False  # TODO: verify on bench; CCW must be positive
-    TRIGGER_MOTOR_INVERTED = False  # TODO: verify on bench; CW must be positive
+    FLYWHEEL_INVERTED = False  # TODO: verify on bench
 
-    # Intake roller (CAN 31) speeds — this motor runs CCW only
-    INTAKE_SPEED = 1.0  # 100% clockwise — pulls ball from ground into robot
-    INTAKE_EJECT_SPEED = -1.0  # 100% counterclockwise — reverses to push ball back out
+    # 5 lb flywheel with 4x 4" compliant wheels as the shooting surface.
+    FLYWHEEL_GEAR_RATIO = 1.0  # TODO: confirm -- assumed direct-drive from the Kraken until measured
+    SHOOTER_WHEEL_DIAMETER_METERS = 4.0 * 0.0254
 
-    # Shooter pulley sizes (belt drive between Kraken and shooter wheel shaft)
-    SHOOTER_MOTOR_PULLEY_TEETH = 26.0  # 15T pulley on Kraken shaft
-    SHOOTER_SHAFT_PULLEY_TEETH = 32.0  # 30T pulley on shooter wheel shaft
-    SHOOTER_GEAR_RATIO = SHOOTER_MOTOR_PULLEY_TEETH / SHOOTER_SHAFT_PULLEY_TEETH
+    CURRENT_LIMIT = 40  # amps, TalonFX stator limit
 
-    # Trigger/hopper motor (CAN 32) speeds — bidirectional
-    TRIGGER_FEED_SPEED = -0.5  # shooting: trigger runs opposite intake (exhale)
-    TRIGGER_INTAKE_SPEED = 0.5  # 100% clockwise — both motors same direction during intake
-    TRIGGER_EJECT_SPEED = -0.5  # same direction as intake during exhale — both motors reverse together
-    JAM_REVERSE_SPEED = -0.5  # CCW — trigger jam-clear reverse
+    TARGET_RPM = 3000.0  # TODO: tune once the shooter is built
+    RPM_TOLERANCE = 50.0
 
-    NOMINAL_VOLTAGE = 12
-    SHOOTER_TELEMETRY_PERIOD_LOOPS = 5
-
-    # Current limits
-    SHOOTER_CURRENT_LIMIT = 60  # TalonFX stator limit (amps)
-    INTAKE_MOTOR_CURRENT_LIMIT = 50  # SparkMAX smart current limit (amps)
-    TRIGGER_MOTOR_CURRENT_LIMIT = 50  # SparkMAX smart current limit (amps)
-
-    # Jam detection (trigger motor — most likely jam point)
-    TRIGGER_SPIKE_THRESHOLD_AMPS = 50.0  # current spike triggers jam clear
-    JAM_REVERSE_TIME_SEC = 0.25  # duration of jam-clear reverse
-
-    # Shooter PID / feedforward — Phoenix 6 on-controller slot 0
-    TARGET_RPM_10_FEET = 3150.0  # interpolated mechanism RPM at 10 ft
-    SHOOTER_KP = 1.0  # proportional (starting value)
-    SHOOTER_KI = 0.0  # integral
-    SHOOTER_KD = 0.0  # derivative
-    SHOOTER_KV = 0.12  # feedforward (tune first)
-    RPM_TOLERANCE = 50.0  # within +/-50 RPM is considered ready
-
-    # Distance to mechanism RPM mapping (distance in feet -> mechanism RPM).
-    # Values calculated from projectile physics (70 deg launch, 18" launcher height,
-    # 72" target height, 0.556 slip factor, 4" wheel diameter, calibrated from test data).
-    # Update SHOOTER_MOTOR_PULLEY_TEETH/SHOOTER_SHAFT_PULLEY_TEETH when gearing changes.
-    DISTANCES_FEET = (5, 7.5, 10, 12.5, 15, 17.5, 18.75)
-    DISTANCE_RPM_MAP = (2150, 2400, 2600, 2850, 3050, 3200, 3300)
+    SHOOTER_KP = 0.11  # TODO: tune -- starting point only, not measured
+    SHOOTER_KI = 0.0
+    SHOOTER_KD = 0.0
+    SHOOTER_KV = 0.12
 
 
-class SensorConstants:
-    # Photo sensor (ball detection) — DIO port 1
-    # Set PHOTO_SENSOR_ENABLED = True once the sensor is physically installed
-    PHOTO_SENSOR_DIO_PORT = 1
-    PHOTO_SENSOR_ENABLED = False  # disabled until installed
-    PHOTO_SENSOR_INVERTED = False  # TODO: verify polarity on bench
+class TriggerConstants:
+    # CAN ID: 30s decade, same family as Shooter.
+    CAM_MOTOR_ID = 31
+
+    CAM_MOTOR_INVERTED = False  # TODO: verify on bench
+    CAM_CURRENT_LIMIT = 20  # amps, small NEO
+    CAM_FIRE_SPEED = 0.6  # [-1, 1] duty cycle while firing
+
+    # DIO ports.
+    LIMIT_SWITCH_DIO_PORT = 0
+    BEAM_BREAK_1_DIO_PORT = 1  # e.g. "ball loaded, waiting to fire"
+    BEAM_BREAK_2_DIO_PORT = 2  # e.g. "ball at the shooter, ready to fire"
+
+    LIMIT_SWITCH_INVERTED = False  # TODO: verify polarity on bench (NC vs NO wiring)
+    BEAM_BREAK_1_INVERTED = False  # TODO: verify polarity on bench
+    BEAM_BREAK_2_INVERTED = False  # TODO: verify polarity on bench
+
+    # Safety timeout in case the limit switch never re-triggers (a jam, a
+    # broken wire) -- without this, fire_command() could run the motor
+    # forever.
+    FIRE_TIMEOUT_SECONDS = 2.0
+
+
+class ElevatorConstants:
+    # CAN ID: 40s decade -- a new subsystem family, one decade past Shooter/Trigger.
+    LIFT_MOTOR_ID = 40
+
+    LIFT_MOTOR_INVERTED = False  # TODO: verify on bench
+    LIFT_CURRENT_LIMIT = 30  # amps -- Redline motors are small, keep this conservative
+
+    # No encoder on this motor: it's a brushed Redline with no built-in
+    # sensor, and no external encoder is installed. This subsystem is
+    # entirely open-loop, driven by a limit switch at each end of travel --
+    # see subsystems/elevator.py.
+    RAISE_SPEED = 0.5  # [-1, 1] duty cycle while raising (spring-assisted -- needs less power)
+    LOWER_SPEED = -0.7  # [-1, 1] duty cycle while lowering (pulling the rope in against the springs)
+
+    TOP_LIMIT_SWITCH_DIO_PORT = 3
+    BOTTOM_LIMIT_SWITCH_DIO_PORT = 4
+    TOP_LIMIT_SWITCH_INVERTED = False  # TODO: verify polarity on bench
+    BOTTOM_LIMIT_SWITCH_INVERTED = False  # TODO: verify polarity on bench
+
+
+class GripperConstants:
+    # CAN ID: 40s decade, same family as Elevator (it rides on the elevator).
+    ROLLER_MOTOR_ID = 41
+
+    ROLLER_MOTOR_INVERTED = False  # TODO: verify on bench
+    ROLLER_CURRENT_LIMIT = 20  # amps, small NEO 550
+
+    INTAKE_SPEED = 1.0
+    EJECT_SPEED = -1.0
 
 
 class Auto:
-    # Single authoritative max robot velocity.
-    # 15 ft/s converted to m/s. Used for both PathPlanner speed limiting
-    # and the PPLTVController gain-table upper bound so they stay in sync.
-    MAX_ROBOT_VELOCITY_MPS = 15.0 * 0.3048  # 4.572 m/s
+    DRIVE_SPEED = 0.5  # [-1, 1] duty cycle while driving to a distance
+    DISTANCE_TOLERANCE_METERS = 0.05
 
-    # PathPlanner motion limits
-    MAX_MODULE_SPEED = MAX_ROBOT_VELOCITY_MPS  # m/s
-    MAX_ACCELERATION = 2.0  # m/s^2
-    MAX_ANGULAR_VELOCITY = 540.0  # deg/s
-    MAX_ANGULAR_ACCELERATION = 720.0  # deg/s^2
-
-    # PPLTVController tuning defaults (state tolerances and control effort limits).
-    # Live adjustment is available on SmartDashboard during test mode only.
-    PPLTV_DT = 0.02
-    PPLTV_MAX_VELOCITY = MAX_ROBOT_VELOCITY_MPS  # matches MAX_MODULE_SPEED
-    PPLTV_Q_X = 0.0625
-    PPLTV_Q_Y = 0.125
-    PPLTV_Q_THETA = 0.75
-    PPLTV_R_VEL = 1.0
-    PPLTV_R_OMEGA = 2.0
-
-
-class VisionConstants:
-    # Camera names (must match PhotonVision configuration)
-    FRONT_CAMERA_NAME = "Front_Camera"
-    REAR_CAMERA_NAME = "Rear_Camera"
-    DRIVER_CAMERA_NAME = "Driver_Camera"
-
-    # Camera transforms (robot-to-camera)
-    # Estimated placement: centerline, 20" (~0.508m) above ground, 1" (~0.0254m) from edge
-    # Assumptions: Robot is ~28" (0.71m) bumper-to-bumper, cameras tilted 30 deg down
-
-    # Front PhotonVision camera (Pi4 + PiCam v2)
-    # TODO: Measure actual robot dimensions and camera mounting position
-    ROBOT_TO_FRONT_CAM = Transform3d(
-        Translation3d(0.102, -0.181, 0.089),  # forward, left, up (meters) # TODO: Verify measurements
-        Rotation3d(0.0, math.radians(-30), 0.0),  # roll, pitch, yaw # TODO: Measure actual camera angles
-    )
-
-    # Rear PhotonVision camera (Pi5 + OV9281) — rotated 180 deg (facing backwards)
-    # TODO: Measure actual robot dimensions and camera mounting position
-    ROBOT_TO_REAR_CAM = Transform3d(
-        Translation3d(-0.305, 0.0, 0.318),  # TODO: Verify measurements
-        Rotation3d(0.0, math.radians(-30), math.radians(180)),  # TODO: Measure actual camera angles
-    )
-
-    # Vision measurement quality gating
-    MAX_TAG_DISTANCE_METERS = 4.0  # TODO: Tune based on camera performance
-    MAX_AMBIGUITY = 0.3  # TODO: Tune based on field testing
-    MIN_TAGS_FOR_MULTI_TAG = 2
-    MAX_VISION_AGE_SECONDS = 0.5
-    TELEMETRY_PERIOD_LOOPS = 5
-
-    # Standard deviations for pose estimation, as (x meters, y meters, heading radians)
-    # tuples — this is the format wpimath's DifferentialDrivePoseEstimator expects in
-    # RobotPy (there is no separate Matrix<N3, N1> type on this binding).
-    SINGLE_TAG_CLOSE_STDDEVS = (0.5, 0.5, math.radians(10))  # TODO: Tune based on testing
-    SINGLE_TAG_FAR_STDDEVS = (1.0, 1.0, math.radians(20))  # TODO: Tune based on testing
-    MULTI_TAG_STDDEVS = (0.2, 0.2, math.radians(5))  # TODO: Tune based on testing
-
-    # Hub positions derived from the 2026-rebuilt-welded AprilTag layout.
-    # Blue hub core tags (18-21, 24-27) span X=4.02-5.23, Y=3.43-4.64 -> center ~= (4.63, 4.03)
-    # Red  hub core tags ( 2- 5,  8-11) span X=11.31-12.52, Y=3.43-4.64 -> center ~= (11.92, 4.03)
-    BLUE_HUB_POSE = Pose2d(4.63, 4.03, Rotation2d())
-    RED_HUB_POSE = Pose2d(11.92, 4.03, Rotation2d())
-
-    # Field zone boundaries (X-axis, meters).
-    # Field runs X=0 (blue DS wall) -> X=16.541 (red DS wall).
-    # Offensive zone for each alliance = between their driver station and their hub.
-    BLUE_OFFENSIVE_MAX_X = 5.2  # m — blue hub outer edge toward center
-    RED_OFFENSIVE_MIN_X = 11.3  # m — red  hub outer edge toward center
-
-    HP_STATION_POSE = Pose2d(1.5, 7.5, Rotation2d.fromDegrees(180))  # TODO: Update with actual 2026 game positions
-    TRENCH_POSE = Pose2d(2.5, 2.0, Rotation2d.fromDegrees(0))  # TODO: Update with actual 2026 game positions
-    DEPOT_POSE = Pose2d(14.0, 2.0, Rotation2d.fromDegrees(180))  # TODO: Update with actual 2026 game positions
-    OUTPOST_POSE = Pose2d(8.27, 0.5, Rotation2d.fromDegrees(90))  # TODO: Update with actual 2026 game positions
-    TOWER_POSE = Pose2d(8.27, 7.5, Rotation2d.fromDegrees(270))  # TODO: Update with actual 2026 game positions
+    # The two autonomous routines' actual distances/angle -- named here so
+    # they're easy to find and change without hunting through
+    # autonomous/routines.py.
+    DRIVE_FORWARD_ONLY_FEET = 10.0
+    DRIVE_TURN_DRIVE_FIRST_LEG_FEET = 5.0
+    DRIVE_TURN_DRIVE_TURN_DEGREES = 90.0  # positive = left (CCW), matches WPILib's convention
+    DRIVE_TURN_DRIVE_SECOND_LEG_FEET = 3.0

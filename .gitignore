@@ -13,4 +13,3 @@ dist/
 .pytest_cache/
 logs/
 networktables.json
-ctre_sim/

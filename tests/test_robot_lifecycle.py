@@ -1,6 +1,7 @@
 """Smoke test: step the whole robot through disabled -> autonomous -> teleop
 and confirm nothing raises. This is an automated version of the manual
-verification this port was checked with before it was first pushed.
+verification this proof of concept was checked with before it was first
+pushed.
 """
 
 
