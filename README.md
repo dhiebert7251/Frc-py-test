@@ -1,4 +1,14 @@
-# Teaching-Bot Proof of Concept
+# Teaching-Bot: Odometry and Kinematics
+
+This branch (`teaching-bot-odometry`) builds directly on the
+`teaching-bot-poc` branch, adding `DifferentialDriveKinematics` and
+`DifferentialDriveOdometry` to `DriveTrain` -- the "natural next lesson"
+that branch's README explicitly called out as deliberately deferred. See
+[Odometry and kinematics](#odometry-and-kinematics) below for what that
+actually means and why it's still not the whole picture (no vision yet --
+that's `teaching-bot-vision`, built on top of *this* branch). Everything
+else below is otherwise unchanged from `teaching-bot-poc` and repeated here
+so this branch's README is complete on its own.
 
 A small, standalone RobotPy project built to teach FRC Python to a
 rookie-heavy programming subteam, using the same conventions and framework
@@ -23,6 +33,7 @@ explained, general Python is assumed.
 - [Commands](#commands)
 - [Controller bindings](#controller-bindings)
 - [Autonomous](#autonomous)
+- [Odometry and kinematics](#odometry-and-kinematics)
 - [Running tests](#running-tests)
 - [Simulating (`physics.py`)](#simulating-physicspy)
 - [2027 alpha preview notes](#2027-alpha-preview-notes)
@@ -255,8 +266,8 @@ visible in the 2027 alpha -- see the next section.
 
 | Subsystem | File | Purpose | Hardware | Key methods |
 |---|---|---|---|---|
-| **DriveTrain** | `subsystems/drivetrain.py` | Moves the robot (tank/differential drive) | 4x REV SparkMax NEO 2.0 (CAN 20-23), navX2 gyro (SPI/MXP) | `drive()`, `stop()`, `get_left/right_distance_meters()`, `get_left/right_velocity_meters_per_second()`, `get_heading_degrees()`, `reset_gyro()`, `reset_encoders()` |
-| **Shooter** | `subsystems/shooter.py` | Spins the flywheel to a fixed target RPM | 1x Kraken X60/TalonFX (CAN 30) | `set_target_rpm()`, `stop()`, `get_current_rpm()`, `is_at_target_speed()` |
+| **DriveTrain** | `subsystems/drivetrain.py` | Moves the robot (tank/differential drive) and tracks where it is on the field | 4x REV SparkMax NEO 2.0 (CAN 20-23), navX2 gyro (SPI/MXP) | `drive()`, `stop()`, `get_left/right_distance_meters()`, `get_left/right_velocity_meters_per_second()`, `get_heading_degrees()`, `reset_gyro()`, `reset_encoders()`, `get_pose()`, `reset_pose()`, `get_wheel_speeds()`, `get_chassis_speeds()` |
+| **Shooter** | `subsystems/shooter.py` | Spins the flywheel to a fixed target RPM | 1x Kraken/TalonFX (CAN 30) | `set_target_rpm()`, `stop()`, `get_current_rpm()`, `is_at_target_speed()` |
 | **Trigger** | `subsystems/trigger.py` | Fires one game piece into the shooter per cam revolution | 1x NEO/SparkMax (CAN 31), 1 limit switch (DIO 0), 2 beam breaks (DIO 1-2) | `run_cam()`, `stop_cam()`, `is_at_home()`, `has_ball_at_stage_1()`, `has_ball_at_stage_2()` |
 | **Elevator** | `subsystems/elevator.py` | Raises/lowers the 2-stage mast | 1x geared Redline/SparkMax, brushed, no encoder (CAN 40), top/bottom limit switches (DIO 3-4) | `set_speed()`, `stop()`, `is_at_top()`, `is_at_bottom()` |
 | **Gripper** | `subsystems/gripper.py` | Spinning roller intake at the end of the elevator | 1x NEO 550/SparkMax (CAN 41) | `set_speed()`, `stop()` |
@@ -318,6 +329,47 @@ two PID commands -- no PathPlanner, no vision, no pre-authored paths. All
 the actual numbers (`10.0`, `5.0`, `90.0`, `3.0`) live in `constants.Auto`,
 in feet/degrees, not buried in `autonomous/routines.py`.
 
+## Odometry and kinematics
+
+`DriveTrain` now tracks the robot's estimated position on the field as a
+`Pose2d` (X meters, Y meters, heading), via two new pieces added in
+`__init__()`:
+
+- **`DifferentialDriveKinematics(TRACK_WIDTH_METERS)`** -- the math
+  relating each wheel's own speed to the whole robot's forward speed and
+  turn rate (a `ChassisSpeeds`). It needs only the track width because,
+  for a tank drive, that's the only geometry that matters: how far apart
+  the wheels are determines how fast the robot turns for a given
+  difference between the two sides' speeds. `get_chassis_speeds()`
+  exposes this; nothing in this project currently drives from it, but
+  it's the natural building block for anything that needs "how fast is
+  the whole robot going" rather than "how fast is each wheel going."
+- **`DifferentialDriveOdometry`** -- the part that actually accumulates
+  position *over time*. Every loop, `DriveTrain.periodic()` feeds it the
+  current gyro heading and both encoder distances, and it integrates
+  those into a running pose estimate -- dead reckoning, the same
+  technique ships have used for centuries: no outside reference, just "I
+  know my heading and how far each wheel has turned, so here's where I
+  must be now." `get_pose()` reads that estimate; `reset_pose()` seeds it
+  with a known starting position (and, since odometry measures distance
+  *since the last reset*, zeroes the encoders at the same time -- doing
+  one without the other would make the two disagree about where "zero"
+  is).
+
+A `wpilib.Field2d()` widget, registered once in `__init__()` and updated
+every loop in `periodic()`, draws this estimated pose on a picture of the
+field in Shuffleboard/Glass -- both live on the real robot and in
+`python -m robotpy sim`.
+
+**Dead reckoning drifts.** Nothing corrects this pose against reality --
+a slightly-off track-width measurement, wheel scrub while turning, or a
+wheel briefly losing traction all introduce small errors that accumulate
+the longer the robot drives without a reset. That's not a bug to fix here;
+it's *the* reason vision-based correction is worth learning next, on the
+`teaching-bot-vision` branch, which fuses AprilTag detections back into
+this same pose to correct that drift instead of trusting dead reckoning
+alone for an entire match.
+
 ## Running tests
 
 ```
@@ -325,13 +377,14 @@ python -m robotpy test
 ```
 
 This runs `pyfrc`'s pytest plugin, which provides the `robot`/`control`
-fixtures used throughout `tests/`. 14 tests currently cover: the standard
+fixtures used throughout `tests/`. 18 tests currently cover: the standard
 pyfrc smoke tests, a full disabled -> autonomous -> teleop lifecycle cycle,
-DriveTrain's encoder bookkeeping and both PID commands actually reaching
-their setpoint and stopping, Trigger's `FireCommand` edge-detection state
-machine (including its timeout), and Elevator's limit-switch-gated
-raise/lower commands. All 14 currently pass, verified against
-`robotpy==2026.2.2` and its pinned vendor dependencies (see `pyproject.toml`).
+DriveTrain's encoder bookkeeping, odometry, and kinematics, both PID
+commands actually reaching their setpoint and stopping, Trigger's
+`FireCommand` edge-detection state machine (including its timeout), and
+Elevator's limit-switch-gated raise/lower commands. All 18 currently pass,
+verified against `robotpy==2026.2.2` and its pinned vendor dependencies
+(see `pyproject.toml`).
 
 **A gotcha worth teaching explicitly**, hit while writing `tests/test_trigger.py`
 and `tests/test_elevator.py`: a `Command` can only be `.schedule()`d while
@@ -343,15 +396,25 @@ error, just a command that never runs. Every test in this suite that
 schedules a command directly does one small `step_timing(enabled=True)`
 step first for exactly this reason.
 
-**Another one, specific to testing PID commands**: `python -m robotpy test`
-has no physics engine running (that's only `python -m robotpy sim`, via
-`physics.py`), so commanding a motor in a test never actually moves a
-simulated encoder or gyro reading on its own. `tests/test_drivetrain.py`'s
-PID tests work around this by writing directly onto the simulated
-encoder/gyro (`drivetrain._left_encoder.setPosition(...)`, the navX
-`SimDeviceSim`'s `"Yaw"` value) to fake "the robot got there," the same way
-`test_trigger.py`/`test_elevator.py` poke a `DigitalInput`'s `DIOSim`
-directly to fake a switch closing.
+**Another one, found while writing this branch's odometry tests, that
+corrects something the previous branch's tests got wrong**: `physics.py`'s
+`PhysicsEngine` actually DOES run under `python -m robotpy test`, not only
+under `python -m robotpy sim` as an earlier version of this file claimed.
+Every loop, it recomputes each simulated motor's encoder reading (and the
+navX's simulated yaw) from real motor physics and overwrites whatever was
+there before -- including a value a test just poked in directly. That's
+harmless for `test_drive_distance_command_finishes_once_target_reached()`/
+`test_turn_to_angle_command_finishes_once_heading_reached()`: they poke a
+sensor and immediately check that same loop's `isFinished()`-driven
+`isScheduled()` result, and the scheduled command reads the poked value
+before physics.py's own recomputation overwrites it a moment later. It is
+**not** harmless for checking a value after the fact, which is exactly
+what testing odometry needs to do -- so `test_odometry_tracks_straight_line_driving()`
+and friends poke the encoders/gyro and then call `drivetrain.periodic()`
+directly, bypassing the scheduler (and therefore physics.py's hook into
+it) entirely, for one deterministic odometry update from a known sensor
+state. See `tests/test_drivetrain.py`'s module docstring for the full
+explanation.
 
 ## Simulating (`physics.py`)
 
@@ -417,12 +480,14 @@ someone to reverse-engineer later:
   method on a subsystem.** See
   [Where do commands live?](#where-do-commands-live) for the full
   reasoning and a side-by-side comparison.
-- **No odometry / pose estimation.** The competition bot's DriveTrain
-  fuses encoders, gyro, and vision into a `DifferentialDrivePoseEstimator`
-  with a `Field2d` widget. This teaching bot deliberately stops at raw
-  `get_left/right_distance_meters()` and `get_heading_degrees()` -- pose
-  estimation is a natural *next* lesson once encoders/gyro/PID are
-  comfortable, not a starting one.
+- **Odometry, but not vision-fused pose estimation yet.** The competition
+  bot's DriveTrain fuses encoders, gyro, AND vision into a
+  `DifferentialDrivePoseEstimator`. This branch adds the encoder/gyro half
+  (`DifferentialDriveKinematics` + `DifferentialDriveOdometry`) on its own
+  first -- see [Odometry and kinematics](#odometry-and-kinematics) -- since
+  dead reckoning and vision correction are two separable ideas worth
+  understanding one at a time. The `teaching-bot-vision` branch adds the
+  vision half on top of this one.
 - **Every command has the same four-method shape, but not every command
   overrides all four -- and that's informative, not arbitrary.**
   `SpinUpShooterCommand` has no `execute()` at all: Phoenix 6's velocity
@@ -519,9 +584,10 @@ suggested order for a rookie who knows Python but not FRC:
    `execute()` at all, contrasted with everything read so far.
 6. **`subsystems/drivetrain.py`** + **`commands/drivetrain_commands.py`** --
    the most hardware (4 motors + a gyro) and all four of its commands,
-   including the two PID ones. Read last since it's the longest pair of
-   files, once PID itself and the smaller command patterns are both
-   familiar.
+   including the two PID ones, plus this branch's addition: kinematics and
+   odometry (see [Odometry and kinematics](#odometry-and-kinematics)). Read
+   last since it's the longest pair of files, once PID itself and the
+   smaller command patterns are both familiar.
 7. **`robotcontainer.py`** -- ties everything together; should now read as
    "the map of the whole robot" rather than new material.
 8. **`tests/`** -- write one new test for a method that doesn't have one
