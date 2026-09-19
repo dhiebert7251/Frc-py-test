@@ -43,6 +43,25 @@ project's source was written. There was no way to run `./gradlew build` or
 `./gradlew test` and see real output, the way the Python sibling's README can report
 an actual, reproduced "14 passed" from `python -m robotpy test`.
 
+**A dedicated post-hoc code-review pass (separate from the session that originally
+wrote this code) found and fixed one build-breaking bug:** `Robot.java` used to
+extend a class called `TimedCommandRobot`, imported from
+`edu.wpi.first.wpilibj2.command`. That class does not exist in Java WPILib -- it's a
+RobotPy-only convenience (`commands2.TimedCommandRobot`, in the Python bindings) that
+automatically calls `CommandScheduler.getInstance().run()` every loop; there's no
+Java equivalent that does the same thing implicitly. This would have failed to
+compile with "cannot find symbol," and even patched to compile, nothing would have
+called the scheduler at all -- every command in this project would have been
+constructed and bound to a button, and then simply never run. Confirmed by comparing
+against the real competition port's own `Robot.java`, which extends AdvantageKit's
+`LoggedRobot` (itself a `TimedRobot` subclass) and explicitly overrides
+`robotPeriodic()` to call the scheduler. Fixed: `Robot.java` now extends `TimedRobot`
+directly, with an explicit `robotPeriodic()` override, matching every real WPILib
+Java command-based robot. This is exactly the kind of error a compile step would
+have caught in one second and a read-through review can miss -- it's named here
+explicitly, not smoothed over, because the whole point of this section is telling you
+what has and hasn't actually been checked.
+
 What that means concretely:
 
 - Every WPILib/REVLib/Phoenix6/Studica class name, method name, and argument order
@@ -67,7 +86,8 @@ What that means concretely:
   known gap -- a missing binary wrapper jar -- and how to fix it in one command) and
   treat any compile error you find as a real bug report, not a surprise. This is
   exactly the kind of code an independent build should verify before anyone relies on
-  the comparison it's meant to support.
+  the comparison it's meant to support -- the `Robot.java` bug above is proof that a
+  careful reading pass alone, without an actual compiler, will miss things.
 
 ## Physical specs
 
@@ -105,7 +125,7 @@ teaching-bot-java/
 └── src/
     ├── main/java/frc/robot/
     │   ├── Main.java              # Entry point -- do not modify
-    │   ├── Robot.java             # extends TimedCommandRobot
+    │   ├── Robot.java             # extends TimedRobot, calls the scheduler from robotPeriodic()
     │   ├── RobotContainer.java    # Wires subsystems, bindings, and autonomous together
     │   ├── Constants.java          # All numeric/boolean constants, one nested class per subsystem
     │   ├── subsystems/
