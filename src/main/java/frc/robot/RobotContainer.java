@@ -2,11 +2,13 @@ package frc.robot;
 
 import static frc.robot.Constants.OperatorConstants.*;
 import static frc.robot.Constants.TriggerConstants.FIRE_TIMEOUT_SECONDS;
+import static frc.robot.Constants.VisionConstants.*;
 
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import frc.robot.autonomous.AutoChooser;
+import frc.robot.commands.ApproachTagCommand;
 import frc.robot.commands.EjectCommand;
 import frc.robot.commands.FireCommand;
 import frc.robot.commands.IntakeCommand;
@@ -20,11 +22,12 @@ import frc.robot.subsystems.Elevator;
 import frc.robot.subsystems.Gripper;
 import frc.robot.subsystems.Shooter;
 import frc.robot.subsystems.Trigger;
+import frc.robot.subsystems.Vision;
 
 /**
  * RobotContainer for the teaching-bot proof of concept.
  *
- * <p>Wires the five subsystems together, sets teleop default commands and button
+ * <p>Wires the six subsystems together, sets teleop default commands and button
  * bindings, and builds the autonomous chooser. See README.md for the full
  * controller-binding table and subsystem/command maps -- this file is meant to be read
  * start-to-finish as the map of the whole robot.
@@ -36,7 +39,15 @@ public class RobotContainer {
     // a JUnit test, a test class) needs to reach `robotContainer.drivetrain` directly
     // to poke at simulated hardware. `final` still means each is assigned exactly once,
     // right here in the constructor below.
-    public final DriveTrain drivetrain = new DriveTrain();
+    //
+    // `vision` is declared, and constructed, before `drivetrain` -- not just field
+    // order for its own sake, but because DriveTrain's constructor needs a real
+    // Vision object to hand to `new DriveTrain(vision)` right below it. Java
+    // initializes instance fields in the order they're written, top to bottom, so
+    // `vision`'s initializer has to come first for `drivetrain`'s initializer to be
+    // able to reference it.
+    public final Vision vision = new Vision();
+    public final DriveTrain drivetrain = new DriveTrain(vision);
     public final Shooter shooter = new Shooter();
     public final Trigger trigger = new Trigger();
     public final Elevator elevator = new Elevator();
@@ -72,10 +83,13 @@ public class RobotContainer {
     /**
      * Configure button-to-command bindings.
      *
-     * <p>Driver (port 0) -- drive only:
+     * <p>Driver (port 0) -- drive, plus the two example vision commands:
      * <ul>
      *   <li>Left Y / Right Y = tank drive</li>
      *   <li>Back = reset gyro heading to 0 (do this before autonomous!)</li>
+     *   <li>A = approach the example tag, stop 3 ft away facing it</li>
+     *   <li>X = approach the example tag, stop 5 ft away, then turn 45 degrees
+     *       right of facing it</li>
      * </ul>
      *
      * <p>Operator (port 1) -- everything else:
@@ -95,6 +109,19 @@ public class RobotContainer {
      */
     private void configureBindings() {
         driverController.back().onTrue(new ResetGyroCommand(drivetrain));
+
+        driverController.a().onTrue(
+            new ApproachTagCommand(drivetrain, vision, EXAMPLE_TAG_ID, APPROACH_STANDOFF_FEET)
+        );
+        driverController.x().onTrue(
+            new ApproachTagCommand(
+                drivetrain,
+                vision,
+                EXAMPLE_TAG_ID,
+                APPROACH_AND_TURN_STANDOFF_FEET,
+                APPROACH_AND_TURN_OFFSET_DEGREES
+            )
+        );
 
         operatorController.a().toggleOnTrue(new SpinUpShooterCommand(shooter));
 

@@ -13,16 +13,20 @@ import com.revrobotics.spark.config.SparkMaxConfig;
 import com.studica.frc.AHRS;
 
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.estimator.DifferentialDrivePoseEstimator;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.DifferentialDriveKinematics;
-import edu.wpi.first.math.kinematics.DifferentialDriveOdometry;
 import edu.wpi.first.math.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+
+import frc.robot.VisionMeasurement;
+
+import java.util.Optional;
 
 /**
  * DriveTrain subsystem -- 6-wheel drop-center differential (tank) drive.
@@ -44,17 +48,35 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
  * class that registers this object with the CommandScheduler and gives it a default,
  * do-nothing {@code periodic()} to override.
  *
- * <p>The {@code teaching-bot-poc-java} branch this one builds on stopped at raw
- * encoder distances and a raw gyro heading -- no kinematics, no odometry. This branch
- * adds {@code DifferentialDriveKinematics} (the math relating each wheel's own speed
- * to the whole robot's speed/turn rate) and pure encoder+gyro dead reckoning via
+ * <p>The {@code teaching-bot-odometry-java} branch this one builds on added
+ * {@code DifferentialDriveKinematics} and pure encoder+gyro dead reckoning via
  * {@code DifferentialDriveOdometry} to track the robot's estimated (X, Y, heading)
- * position on the field -- exactly the same two pieces, in the same order, that the
- * Python sibling's {@code teaching-bot-odometry} branch adds to its own
- * {@code DriveTrain}. Vision-based drift correction is a deliberate <i>next</i>
- * lesson, not a starting one -- see the {@code teaching-bot-vision-java} branch.
+ * position on the field. This branch replaces that dead reckoning with a
+ * {@code DifferentialDrivePoseEstimator}, which does the same encoder+gyro
+ * integration AND periodically corrects itself using AprilTag detections from the
+ * Vision subsystem ({@code subsystems/Vision.java}) -- exactly the drift-correction
+ * the previous branch's README named as the reason to add vision next. This is the
+ * same swap, in the same order, that the Python sibling's {@code teaching-bot-vision}
+ * branch makes to its own {@code DriveTrain}. {@code DriveTrain} doesn't do any of
+ * the actual camera/AprilTag work itself; it just calls
+ * {@code vision.getBestVisionMeasurementIfFresh()} every loop and, if there's a
+ * fresh one, folds it in via {@code addVisionMeasurement()}. This constructor
+ * pattern ({@code DifferentialDrivePoseEstimator(kinematics, gyroAngle,
+ * leftDistance, rightDistance, initialPose)} and
+ * {@code addVisionMeasurement(pose, timestampSeconds, stdDevs)}) was cross-checked
+ * directly against the real competition port's own {@code DriveTrain.java} -- unlike
+ * {@code Vision.java}'s {@code PhotonPoseEstimator} construction (see that file's
+ * class-level comment), this part of the design was NOT a deliberate divergence.
  */
 public class DriveTrain extends SubsystemBase {
+
+    // DriveTrain only ever READS from Vision (asking "got a fresh fix?" every loop)
+    // -- it never commands it, so this is a plain reference here, not something
+    // DriveTrain calls addRequirements() on. RobotContainer constructs Vision first
+    // and passes it in below. `private final`, same as every other field here: once
+    // handed a Vision object in the constructor, this field is never reassigned to
+    // point at a different one.
+    private final Vision vision;
 
     // ---- Motor groupings: 2 physical motors per side, "lead" + "follower" ----
     //
@@ -124,17 +146,18 @@ public class DriveTrain extends SubsystemBase {
     // this project currently uses it.
     private final DifferentialDriveKinematics kinematics = new DifferentialDriveKinematics(TRACK_WIDTH_METERS);
 
-    // DifferentialDriveOdometry is the part that actually accumulates position OVER
-    // TIME. Every loop, periodic() below feeds it the current gyro heading and both
-    // encoder distances, and it integrates those into a running pose estimate -- dead
-    // reckoning, the same technique ships have used for centuries: no outside
-    // reference, just "I know my heading and how far each wheel has turned, so here's
-    // where I must be now." Constructed here with the encoders already zeroed (see
-    // configureMotors() below, called from the constructor before this field is
-    // initialized) and the gyro's current heading, starting pose defaulted to
-    // Pose2d() (X=0, Y=0, heading=0) -- a stand-in field origin until resetPose() sets
-    // a real one.
-    private final DifferentialDriveOdometry odometry;
+    // DifferentialDrivePoseEstimator does everything DifferentialDriveOdometry did
+    // (integrate gyro heading + encoder distance into a running pose, fed every loop
+    // below) PLUS accepts outside corrections via addVisionMeasurement() --
+    // internally, it keeps a short history of past poses so a vision fix that
+    // arrived slightly late (camera processing takes real time) can be applied at
+    // the moment it was actually true, not the moment it was received, then replays
+    // odometry forward from there. Constructed here with the encoders already
+    // zeroed (see configureMotors() below, called from the constructor before this
+    // field is initialized) and the gyro's current heading; starting pose defaulted
+    // to Pose2d() (X=0, Y=0, heading=0) -- a stand-in field origin until resetPose()
+    // sets a real one, exactly as before.
+    private final DifferentialDrivePoseEstimator poseEstimator;
 
     // Field2d is a Shuffleboard/Glass widget that draws the robot as an icon on a
     // picture of the field, at whatever pose you last gave it -- registered once in
@@ -149,14 +172,15 @@ public class DriveTrain extends SubsystemBase {
     private int telemetryLoopCounter = 0;
 
     /**
-     * The constructor -- Java calls this automatically for {@code new DriveTrain()}.
-     * Unlike every command class in this project (see commands/TeleopDriveCommand.java
-     * for the full explanation of constructor syntax), this constructor takes no
-     * parameters at all: DriveTrain doesn't need anything handed to it from the
-     * outside to build itself, since every value it needs (CAN IDs, current limits)
-     * comes from {@code Constants.DriveTrainConstants} instead.
+     * The constructor -- Java calls this automatically for {@code new DriveTrain(vision)}.
+     * Unlike the poc-java/odometry-java branches, this constructor now takes one
+     * parameter: {@code vision}, the {@code Vision} subsystem instance to read fresh
+     * AprilTag fixes from every loop. See commands/TeleopDriveCommand.java for the
+     * full explanation of constructor parameter syntax in general (public/type
+     * annotations/no return type/implicit super()) -- this comment only covers what's
+     * new here.
      *
-     * <p>{@code odometry} is assigned here, in the constructor BODY, rather than
+     * <p>{@code poseEstimator} is assigned here, in the constructor BODY, rather than
      * inline at its field declaration the way {@code kinematics} and {@code field}
      * are above -- it's the one field whose initial value depends on calling
      * {@code getHeadingDegrees()}/{@code getLeftDistanceMeters()}/
@@ -164,15 +188,19 @@ public class DriveTrain extends SubsystemBase {
      * to have already zeroed the encoders. Java runs field initializers and the
      * constructor body in the order they're written, top to bottom, so
      * {@code configureMotors()} has to be called first, right here, before
-     * {@code odometry} can be built from a known-zero starting state.
+     * {@code poseEstimator} can be built from a known-zero starting state.
      */
-    public DriveTrain() {
+    public DriveTrain(Vision vision) {
+        this.vision = vision;
+
         configureMotors();
 
-        odometry = new DifferentialDriveOdometry(
+        poseEstimator = new DifferentialDrivePoseEstimator(
+            kinematics,
             Rotation2d.fromDegrees(getHeadingDegrees()),
             getLeftDistanceMeters(),
-            getRightDistanceMeters()
+            getRightDistanceMeters(),
+            new Pose2d()
         );
 
         SmartDashboard.putData("Field", field);
@@ -302,6 +330,25 @@ public class DriveTrain extends SubsystemBase {
         return rightEncoder.getVelocity();
     }
 
+    /**
+     * Test-only hook: directly sets both drive encoders' simulated position, in
+     * meters. {@code leftEncoder}/{@code rightEncoder} above are package-private
+     * specifically so a same-package test can poke them directly (see their own
+     * comment) -- and that works fine for {@code DriveTrainTest.java}, which lives
+     * in this same {@code frc.robot.subsystems} package. But
+     * {@code ApproachTagCommandTest.java} needs to fake a driven distance too, and
+     * it has to live in {@code frc.robot.commands} instead, to reach
+     * {@code ApproachTagCommand}'s own package-private state -- and package-private
+     * access never spans two different packages no matter how either side is
+     * declared. Rather than pretend that conflict away, this one small `public`
+     * method -- its purpose named plainly in its own name -- is the honest fix for
+     * a test that genuinely needs to reach across both packages at once.
+     */
+    public void setEncoderPositionsForTest(double leftMeters, double rightMeters) {
+        leftEncoder.setPosition(leftMeters);
+        rightEncoder.setPosition(rightMeters);
+    }
+
     public void resetEncoders() {
         leftEncoder.setPosition(0);
         rightEncoder.setPosition(0);
@@ -333,27 +380,29 @@ public class DriveTrain extends SubsystemBase {
         return kinematics.toChassisSpeeds(getWheelSpeeds());
     }
 
-    // ---- Pose (odometry) ----
+    // ---- Pose (odometry + vision) ----
     //
     // getPose() is DriveTrain's best current estimate of where the robot is on the
-    // field, as a Pose2d (X meters, Y meters, heading). It's built entirely on
-    // encoder+gyro dead reckoning -- nothing corrects this against reality yet (see
-    // the class-level doc comment above for why that's a deliberate next lesson, not
-    // a gap in this branch).
+    // field, as a Pose2d (X meters, Y meters, heading). It's still built on the same
+    // encoder+gyro dead reckoning as before, but now periodic() also feeds it fresh
+    // AprilTag fixes from Vision when they're available, correcting the small errors
+    // (wheel scrub, an imperfect track-width measurement) that pure dead reckoning
+    // would otherwise accumulate forever.
 
     public Pose2d getPose() {
-        return odometry.getPoseMeters();
+        return poseEstimator.getEstimatedPosition();
     }
 
     /**
-     * Tells odometry "the robot is actually at this pose right now" -- used once at
-     * the start of autonomous once a starting position is known. Resets the encoders
-     * too: distance is measured <i>since the last reset</i>, so an old encoder reading
-     * and a freshly reset pose would disagree about where "zero" is.
+     * Tells the pose estimator "the robot is actually at this pose right now" --
+     * used once at the start of autonomous once a starting position is known.
+     * Resets the encoders too: distance is measured <i>since the last reset</i>, so
+     * an old encoder reading and a freshly reset pose would disagree about where
+     * "zero" is.
      */
     public void resetPose(Pose2d pose) {
         resetEncoders();
-        odometry.resetPosition(Rotation2d.fromDegrees(getHeadingDegrees()), 0.0, 0.0, pose);
+        poseEstimator.resetPosition(Rotation2d.fromDegrees(getHeadingDegrees()), 0.0, 0.0, pose);
     }
 
     /**
@@ -373,7 +422,22 @@ public class DriveTrain extends SubsystemBase {
         // schedule below -- skipping updates would mean missing however much the
         // robot moved during the skipped loops, which is exactly the kind of small,
         // silent error that makes dead-reckoned position drift over a match.
-        odometry.update(Rotation2d.fromDegrees(getHeadingDegrees()), getLeftDistanceMeters(), getRightDistanceMeters());
+        poseEstimator.update(
+            Rotation2d.fromDegrees(getHeadingDegrees()), getLeftDistanceMeters(), getRightDistanceMeters()
+        );
+
+        // Fold in a fresh AprilTag fix, if Vision has one this loop. This is the
+        // actual drift correction: nothing here has to know HOW the measurement was
+        // computed, only that it's a (pose, timestamp, confidence) triple the
+        // estimator can weigh against its own dead-reckoned belief. `Optional`'s
+        // `ifPresent(...)` runs the given block only when a value is actually there,
+        // the Java equivalent of the Python sibling's
+        // `if measurement is not None: ...`.
+        Optional<VisionMeasurement> measurement = vision.getBestVisionMeasurementIfFresh();
+        measurement.ifPresent(m ->
+            poseEstimator.addVisionMeasurement(m.estimatedPose(), m.timestampSeconds(), m.standardDeviations())
+        );
+
         field.setRobotPose(getPose());
 
         telemetryLoopCounter++;

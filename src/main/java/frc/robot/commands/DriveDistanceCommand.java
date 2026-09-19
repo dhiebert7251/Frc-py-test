@@ -32,6 +32,10 @@ public class DriveDistanceCommand extends Command {
     private final double targetDistanceMeters;
     private final PIDController pid;
 
+    // Not `final`: set fresh every time this command starts, in initialize() below --
+    // see that method's doc comment for why this field exists at all.
+    private double startDistanceMeters;
+
     /**
      * {@code double distanceFeet} -- the same {@code name: type} idea as every other
      * parameter in this project, just using one of Java's built-in primitive types
@@ -52,11 +56,20 @@ public class DriveDistanceCommand extends Command {
     @Override
     public void initialize() {
         // initialize() runs exactly once, the instant this command is scheduled (not
-        // when it's constructed, which for autonomous commands happens once at
-        // RobotContainer startup, possibly minutes before the command actually runs).
-        // Zeroing the encoders and the PID controller here means "distance driven" is
-        // always measured from wherever the robot happens to be right now.
-        drivetrain.resetEncoders();
+        // when it's constructed in the constructor, which for autonomous commands
+        // happens once at RobotContainer startup, possibly minutes before the command
+        // actually runs).
+        //
+        // This records the CURRENT encoder reading as a baseline rather than calling
+        // drivetrain.resetEncoders() to zero it -- a tempting shortcut this command
+        // used to take, until DriveTrain grew a pose estimator (see
+        // subsystems/DriveTrain.java) that reads these same encoders every loop.
+        // Odometry measures distance *since its last reset*, so zeroing the encoders
+        // out from under it looks exactly like the robot teleporting back near the
+        // origin -- a real bug this command caused for every leg after the first in
+        // the drive-turn-drive autonomous routine, since fixed by measuring a
+        // relative distance instead of an absolute one.
+        startDistanceMeters = drivetrain.getAverageDistanceMeters();
         pid.reset();
         pid.setSetpoint(targetDistanceMeters);
     }
@@ -69,7 +82,8 @@ public class DriveDistanceCommand extends Command {
         // margin on top of tuning KP conservatively -- a large distance error
         // (commanding 10 feet from a dead stop) should never be able to demand more
         // than that fraction of full power.
-        double output = pid.calculate(drivetrain.getAverageDistanceMeters());
+        double distanceThisLeg = drivetrain.getAverageDistanceMeters() - startDistanceMeters;
+        double output = pid.calculate(distanceThisLeg);
         output = Math.max(-DRIVE_DISTANCE_MAX_OUTPUT, Math.min(DRIVE_DISTANCE_MAX_OUTPUT, output));
         drivetrain.drive(output, output);
     }

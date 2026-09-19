@@ -39,11 +39,12 @@ wpi.java.debugJni = false
 
 def includeDesktopSupport = false
 
-// Defining dependencies: WPILib itself, plus the three vendor libraries this robot's
+// Defining dependencies: WPILib itself, plus the four vendor libraries this robot's
 // hardware needs (REVLib for the SparkMax controllers, Studica for the navX gyro,
-// Phoenix 6 for the Kraken shooter motor). See vendordeps/ for exactly which library
-// versions -- same versions the real competition port (2026_competition_code) uses,
-// so a side-by-side comparison isn't also comparing different library versions.
+// Phoenix 6 for the Kraken shooter motor, PhotonLib for the AprilTag camera). See
+// vendordeps/ for exactly which library versions -- same versions the real
+// competition port (2026_competition_code) uses, so a side-by-side comparison isn't
+// also comparing different library versions.
 dependencies {
     annotationProcessor wpi.java.deps.wpilibAnnotations()
     implementation wpi.java.deps.wpilib()
