@@ -28,7 +28,13 @@ Java-vs-Python comparison material this README doesn't repeat.
 **Still not compiled, run, or tested** -- same sandboxed session, same network policy
 blocking `frcmaven.wpi.edu` and the REVLib/CTRE/Studica Maven hosts. See
 `teaching-bot-poc-java`'s README for the full explanation; everything there applies
-here too.
+here too, including that branch's own `Robot.java` fix -- this branch inherited
+`Robot.java` unchanged, so the same build-breaking bug (extending a nonexistent
+`TimedCommandRobot` class instead of `TimedRobot`, with no `robotPeriodic()`
+override to call the scheduler) was present here too, and has now been fixed here
+the same way: extend `TimedRobot` directly, with an explicit `robotPeriodic()`
+override. See that branch's README for the full explanation of the bug and why it
+was confirmed real, not just suspected.
 
 **One specific, disclosed uncertainty new to this branch:** `DriveTrain.getPose()`
 below calls `odometry.getPoseMeters()`. WPILib's `DifferentialDriveOdometry` class
@@ -67,7 +73,8 @@ Only `subsystems/DriveTrain.java` and `src/test/java/frc/robot/subsystems/DriveT
   added for the same reason.
 
 Nothing else in the project (`Constants.java`, every command, every other
-subsystem, `RobotContainer.java`, autonomous) changed at all.
+subsystem, `RobotContainer.java`, autonomous) changed at all -- except `Robot.java`,
+which only changed to carry the `TimedCommandRobot` -> `TimedRobot` fix noted above.
 
 ## Odometry and kinematics
 
