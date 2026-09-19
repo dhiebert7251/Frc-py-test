@@ -1,5 +1,13 @@
 package frc.robot;
 
+import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.VecBuilder;
+import edu.wpi.first.math.geometry.Rotation3d;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Translation3d;
+import edu.wpi.first.math.numbers.N1;
+import edu.wpi.first.math.numbers.N3;
+
 /**
  * Robot-wide numerical/boolean constants for the teaching-bot proof of concept.
  *
@@ -211,6 +219,72 @@ public final class Constants {
 
         public static final double INTAKE_SPEED = 1.0;
         public static final double EJECT_SPEED = -1.0;
+    }
+
+    public static final class VisionConstants {
+        private VisionConstants() {}
+
+        // Must match the name configured in the PhotonVision UI for this camera.
+        public static final String CAMERA_NAME = "Front_Camera";
+
+        // Robot-to-camera mounting transform: new Transform3d(new Translation3d(forward,
+        // left, up), new Rotation3d(roll, pitch, yaw)), all relative to the robot's own
+        // center at floor level -- the same convention the competition port's
+        // ROBOT_TO_FRONT_CAM/ROBOT_TO_REAR_CAM constants use (see that repo's own
+        // Constants.java, VisionConstants).
+        //
+        // Camera is centered left/right (0 lateral offset), mounted 3 inches back from
+        // the front of the 32"-long frame -- 13 inches forward of the robot's center,
+        // since the center is 16 inches from the front -- 1 foot above the floor,
+        // angled 15 degrees upward.
+        //
+        // Sign convention verified directly (not assumed) against the Python sibling's
+        // installed wpimath package earlier in this project's development: rotating
+        // Translation3d(1, 0, 0) -- "straight ahead" -- by Rotation3d(0, pitch, 0) gives
+        // a NEGATIVE pitch a positive Z component (tilted up) and a POSITIVE pitch a
+        // negative Z component (tilted down). "Angled upward" is therefore a negative
+        // pitch here -- worth double-checking against whichever WPILib version is
+        // installed if this is ever copied elsewhere, since it's easy to get backwards.
+        // wpimath's Java and Python builds share the same underlying C++ geometry
+        // implementation, so this convention carries over unchanged, but it was not
+        // re-verified against the Java package specifically (see README).
+        public static final Transform3d ROBOT_TO_CAMERA = new Transform3d(
+            new Translation3d((16.0 - 3.0) * 0.0254, 0.0, 1.0 * 0.3048),
+            new Rotation3d(0.0, Math.toRadians(-15.0), 0.0)
+        );
+
+        // Vision measurement quality gating -- same TODO-marked starting points as the
+        // competition bot's, not yet tuned against a real camera.
+        public static final double MAX_TAG_DISTANCE_METERS = 4.0; // TODO: tune based on camera performance
+        public static final double MAX_AMBIGUITY = 0.3; // TODO: tune based on field testing
+        public static final int MIN_TAGS_FOR_MULTI_TAG = 2;
+        public static final double MAX_VISION_AGE_SECONDS = 0.5;
+        public static final int TELEMETRY_PERIOD_LOOPS = 5;
+
+        // Standard deviations for pose estimation, as a 3x1 matrix of (x meters,
+        // y meters, heading radians) -- the shape
+        // DifferentialDrivePoseEstimator.addVisionMeasurement(...) requires in Java.
+        // VecBuilder.fill(...) is the idiomatic way to build one of these from plain
+        // numbers without writing out a Matrix constructor by hand -- confirmed against
+        // the competition port's own identical use of VecBuilder.fill for this exact
+        // field. Multi-tag and close single-tag detections are trusted more (lower std
+        // dev) than a single tag far away.
+        public static final Matrix<N3, N1> SINGLE_TAG_CLOSE_STDDEVS =
+            VecBuilder.fill(0.5, 0.5, Math.toRadians(10)); // TODO: tune based on testing
+        public static final Matrix<N3, N1> SINGLE_TAG_FAR_STDDEVS =
+            VecBuilder.fill(1.0, 1.0, Math.toRadians(20)); // TODO: tune based on testing
+        public static final Matrix<N3, N1> MULTI_TAG_STDDEVS =
+            VecBuilder.fill(0.2, 0.2, Math.toRadians(5)); // TODO: tune based on testing
+
+        // The two example ApproachTagCommand bindings in RobotContainer.java -- named
+        // here rather than as bare numbers at the binding site, same convention as
+        // Auto's routine distances below. Both target the same example tag; nothing
+        // about ApproachTagCommand requires that, it's just what "example tag 15" gives
+        // us to name concretely.
+        public static final int EXAMPLE_TAG_ID = 15;
+        public static final double APPROACH_STANDOFF_FEET = 3.0; // stop this far away, facing the tag directly
+        public static final double APPROACH_AND_TURN_STANDOFF_FEET = 5.0; // stop this far away, then rotate
+        public static final double APPROACH_AND_TURN_OFFSET_DEGREES = 45.0; // positive = right (clockwise) of facing the tag
     }
 
     public static final class Auto {
