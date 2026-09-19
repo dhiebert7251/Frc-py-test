@@ -13,7 +13,14 @@ import com.revrobotics.spark.config.SparkMaxConfig;
 import com.studica.frc.AHRS;
 
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.math.kinematics.DifferentialDriveKinematics;
+import edu.wpi.first.math.kinematics.DifferentialDriveOdometry;
+import edu.wpi.first.math.kinematics.DifferentialDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
+import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -37,11 +44,15 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
  * class that registers this object with the CommandScheduler and gives it a default,
  * do-nothing {@code periodic()} to override.
  *
- * <p>This subsystem deliberately stops at raw encoder distances and a raw gyro heading
- * -- no PathPlanner, no vision, no pose estimator/odometry fusing them together. Pose
- * estimation is a natural <i>next</i> lesson once encoders, gyro, and PID are all
- * comfortable on their own, not a starting one (see the {@code teaching-bot-odometry}
- * branch, the direct Java sibling of this one's Python counterpart).
+ * <p>The {@code teaching-bot-poc-java} branch this one builds on stopped at raw
+ * encoder distances and a raw gyro heading -- no kinematics, no odometry. This branch
+ * adds {@code DifferentialDriveKinematics} (the math relating each wheel's own speed
+ * to the whole robot's speed/turn rate) and pure encoder+gyro dead reckoning via
+ * {@code DifferentialDriveOdometry} to track the robot's estimated (X, Y, heading)
+ * position on the field -- exactly the same two pieces, in the same order, that the
+ * Python sibling's {@code teaching-bot-odometry} branch adds to its own
+ * {@code DriveTrain}. Vision-based drift correction is a deliberate <i>next</i>
+ * lesson, not a starting one -- see the {@code teaching-bot-vision-java} branch.
  */
 public class DriveTrain extends SubsystemBase {
 
@@ -78,16 +89,16 @@ public class DriveTrain extends SubsystemBase {
     // deliberate exception to the `private` rule every other hardware field on this
     // page follows. DriveTrainTest.java (in this same frc.robot.subsystems package)
     // needs to poke these two objects' simulated position directly with
-    // `.setPosition(...)` to test DriveDistanceCommand/TurnToAngleCommand without a
-    // real robot -- the Python sibling's equivalent test does the same thing by
-    // reaching past its `_left_encoder`'s leading-underscore naming CONVENTION, since
-    // Python has no enforced privacy to get past. Java's `private` is enforced by the
-    // compiler with no such loophole, so getting the same test access here needs an
-    // actual, coarser access level instead of a bypassable naming hint. Package-private
-    // is the narrowest level that still works: any class in frc.robot.subsystems can
-    // reach these fields, but nothing outside that package (including
-    // RobotContainer.java, in frc.robot) can -- a real, if slightly wider, restriction,
-    // not merely a polite request.
+    // `.setPosition(...)` to test odometry and the PID commands without a real robot --
+    // the Python sibling's equivalent test does the same thing by reaching past its
+    // `_left_encoder`'s leading-underscore naming CONVENTION, since Python has no
+    // enforced privacy to get past. Java's `private` is enforced by the compiler with
+    // no such loophole, so getting the same test access here needs an actual, coarser
+    // access level instead of a bypassable naming hint. Package-private is the
+    // narrowest level that still works: any class in frc.robot.subsystems can reach
+    // these fields, but nothing outside that package (including RobotContainer.java,
+    // in frc.robot) can -- a real, if slightly wider, restriction, not merely a polite
+    // request.
     final RelativeEncoder leftEncoder = leftLead.getEncoder();
     final RelativeEncoder rightEncoder = rightLead.getEncoder();
 
@@ -104,6 +115,33 @@ public class DriveTrain extends SubsystemBase {
     // (that's the whole point of having configured them to follow, below).
     private final DifferentialDrive driver = new DifferentialDrive(leftLead, rightLead);
 
+    // ---- Kinematics and odometry ----
+    //
+    // DifferentialDriveKinematics only needs one number -- the track width
+    // (left-to-right wheel spacing) -- to convert between "each wheel's own speed" and
+    // "the whole robot's forward speed and turn rate" (a ChassisSpeeds). It doesn't
+    // track anything over time by itself; getChassisSpeeds() below is the only place
+    // this project currently uses it.
+    private final DifferentialDriveKinematics kinematics = new DifferentialDriveKinematics(TRACK_WIDTH_METERS);
+
+    // DifferentialDriveOdometry is the part that actually accumulates position OVER
+    // TIME. Every loop, periodic() below feeds it the current gyro heading and both
+    // encoder distances, and it integrates those into a running pose estimate -- dead
+    // reckoning, the same technique ships have used for centuries: no outside
+    // reference, just "I know my heading and how far each wheel has turned, so here's
+    // where I must be now." Constructed here with the encoders already zeroed (see
+    // configureMotors() below, called from the constructor before this field is
+    // initialized) and the gyro's current heading, starting pose defaulted to
+    // Pose2d() (X=0, Y=0, heading=0) -- a stand-in field origin until resetPose() sets
+    // a real one.
+    private final DifferentialDriveOdometry odometry;
+
+    // Field2d is a Shuffleboard/Glass widget that draws the robot as an icon on a
+    // picture of the field, at whatever pose you last gave it -- registered once in
+    // the constructor (not every loop) so Shuffleboard doesn't see it
+    // appear/disappear/duplicate.
+    private final Field2d field = new Field2d();
+
     // Used by periodic() below to only publish telemetry every Nth loop instead of
     // every ~20ms -- SmartDashboard/NetworkTables traffic adds up, and nothing reads
     // these values fast enough to need them every single loop. Not `final`: this one
@@ -117,9 +155,27 @@ public class DriveTrain extends SubsystemBase {
      * parameters at all: DriveTrain doesn't need anything handed to it from the
      * outside to build itself, since every value it needs (CAN IDs, current limits)
      * comes from {@code Constants.DriveTrainConstants} instead.
+     *
+     * <p>{@code odometry} is assigned here, in the constructor BODY, rather than
+     * inline at its field declaration the way {@code kinematics} and {@code field}
+     * are above -- it's the one field whose initial value depends on calling
+     * {@code getHeadingDegrees()}/{@code getLeftDistanceMeters()}/
+     * {@code getRightDistanceMeters()}, which in turn need {@code configureMotors()}
+     * to have already zeroed the encoders. Java runs field initializers and the
+     * constructor body in the order they're written, top to bottom, so
+     * {@code configureMotors()} has to be called first, right here, before
+     * {@code odometry} can be built from a known-zero starting state.
      */
     public DriveTrain() {
         configureMotors();
+
+        odometry = new DifferentialDriveOdometry(
+            Rotation2d.fromDegrees(getHeadingDegrees()),
+            getLeftDistanceMeters(),
+            getRightDistanceMeters()
+        );
+
+        SmartDashboard.putData("Field", field);
     }
 
     /**
@@ -220,9 +276,9 @@ public class DriveTrain extends SubsystemBase {
     // These all return SI units (meters, meters/second, degrees for angle -- there's
     // no "imperial degrees") even though nothing else in FRC is metric. That's
     // deliberate: WPILib's own math expects meters, so keeping this subsystem's
-    // internal numbers in meters means it can be handed directly to PID code without a
-    // conversion at every call site. The conversion to feet (for humans) happens in
-    // exactly two places: this file's periodic() telemetry, and
+    // internal numbers in meters means it can be handed directly to kinematics/PID
+    // code without a conversion at every call site. The conversion to feet (for
+    // humans) happens in exactly two places: this file's periodic() telemetry, and
     // commands/DriveDistanceCommand.java's constructor, which is the one place a "how
     // many feet" number enters this subsystem from the outside.
 
@@ -263,6 +319,43 @@ public class DriveTrain extends SubsystemBase {
         gyro.reset();
     }
 
+    public DifferentialDriveWheelSpeeds getWheelSpeeds() {
+        return new DifferentialDriveWheelSpeeds(getLeftVelocityMetersPerSecond(), getRightVelocityMetersPerSecond());
+    }
+
+    /**
+     * The whole robot's forward speed (m/s) and turn rate (rad/s), computed from the
+     * two wheel speeds via {@code DifferentialDriveKinematics}. Nothing in this
+     * project currently drives from this -- it's here as the other half of what
+     * kinematics is for, alongside odometry.
+     */
+    public ChassisSpeeds getChassisSpeeds() {
+        return kinematics.toChassisSpeeds(getWheelSpeeds());
+    }
+
+    // ---- Pose (odometry) ----
+    //
+    // getPose() is DriveTrain's best current estimate of where the robot is on the
+    // field, as a Pose2d (X meters, Y meters, heading). It's built entirely on
+    // encoder+gyro dead reckoning -- nothing corrects this against reality yet (see
+    // the class-level doc comment above for why that's a deliberate next lesson, not
+    // a gap in this branch).
+
+    public Pose2d getPose() {
+        return odometry.getPoseMeters();
+    }
+
+    /**
+     * Tells odometry "the robot is actually at this pose right now" -- used once at
+     * the start of autonomous once a starting position is known. Resets the encoders
+     * too: distance is measured <i>since the last reset</i>, so an old encoder reading
+     * and a freshly reset pose would disagree about where "zero" is.
+     */
+    public void resetPose(Pose2d pose) {
+        resetEncoders();
+        odometry.resetPosition(Rotation2d.fromDegrees(getHeadingDegrees()), 0.0, 0.0, pose);
+    }
+
     /**
      * {@code @Override} tells the compiler "this method is meant to replace a method
      * of the same name/signature on the parent class ({@code SubsystemBase})" -- if a
@@ -276,6 +369,13 @@ public class DriveTrain extends SubsystemBase {
      */
     @Override
     public void periodic() {
+        // Odometry has to be fed every single loop, not just on the slower telemetry
+        // schedule below -- skipping updates would mean missing however much the
+        // robot moved during the skipped loops, which is exactly the kind of small,
+        // silent error that makes dead-reckoned position drift over a match.
+        odometry.update(Rotation2d.fromDegrees(getHeadingDegrees()), getLeftDistanceMeters(), getRightDistanceMeters());
+        field.setRobotPose(getPose());
+
         telemetryLoopCounter++;
         if (telemetryLoopCounter >= TELEMETRY_PERIOD_LOOPS) {
             telemetryLoopCounter = 0;
@@ -287,6 +387,9 @@ public class DriveTrain extends SubsystemBase {
             SmartDashboard.putNumber("DriveTrain/LeftVelocityFPS", getLeftVelocityMetersPerSecond() / METERS_PER_FOOT);
             SmartDashboard.putNumber("DriveTrain/RightVelocityFPS", getRightVelocityMetersPerSecond() / METERS_PER_FOOT);
             SmartDashboard.putNumber("DriveTrain/HeadingDeg", getHeadingDegrees());
+            Pose2d pose = getPose();
+            SmartDashboard.putNumber("DriveTrain/PoseXFeet", pose.getX() / METERS_PER_FOOT);
+            SmartDashboard.putNumber("DriveTrain/PoseYFeet", pose.getY() / METERS_PER_FOOT);
         }
     }
 }

@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import edu.wpi.first.hal.HAL;
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.wpilibj.simulation.DriverStationSim;
 import edu.wpi.first.wpilibj.simulation.SimDeviceSim;
 import edu.wpi.first.wpilibj.simulation.SimHooks;
@@ -20,8 +22,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for DriveTrain's encoder-distance bookkeeping and its PID autonomous
- * commands -- a Java translation of the Python sibling's {@code test_drivetrain.py}.
+ * Unit tests for DriveTrain's encoder-distance bookkeeping, odometry, kinematics, and
+ * its PID autonomous commands -- a Java translation of the Python sibling's
+ * {@code test_drivetrain.py}.
  *
  * <p>This test class lives in {@code frc.robot.subsystems} (not {@code frc.robot},
  * where most of this project's classes live) specifically so it can reach
@@ -35,7 +38,10 @@ import org.junit.jupiter.api.Test;
  * so unlike the Python tests, nothing here overwrites a poked encoder or gyro value on
  * its own. That actually makes these tests SIMPLER than their Python counterparts:
  * there's no physics-engine-races-the-scheduler gotcha to work around, since nothing
- * is racing.
+ * is racing. The odometry tests below still call {@code drivetrain.periodic()}
+ * directly, matching the Python sibling's own pattern, even though nothing here
+ * strictly requires bypassing the scheduler the way the Python version does -- it
+ * keeps the two test suites reading the same way line for line.
  */
 class DriveTrainTest {
 
@@ -137,5 +143,47 @@ class DriveTrainTest {
         assertNotNull(AutoRoutines.driveForwardOnly(drivetrain));
         assertNotNull(AutoRoutines.driveTurnDrive(drivetrain));
         assertTrue(Constants.Auto.DRIVE_FORWARD_ONLY_FEET > 0);
+    }
+
+    @Test
+    void poseStartsAtOrigin() {
+        Pose2d pose = drivetrain.getPose();
+        assertEquals(0.0, pose.getX());
+        assertEquals(0.0, pose.getY());
+        assertEquals(0.0, pose.getRotation().getDegrees());
+    }
+
+    @Test
+    void odometryTracksStraightLineDriving() {
+        // Poke both encoders to a known distance, then call periodic() directly.
+        // Heading is left at 0, so odometry should report having moved straight down
+        // the field's X axis by exactly this distance.
+        drivetrain.leftEncoder.setPosition(2.0);
+        drivetrain.rightEncoder.setPosition(2.0);
+        drivetrain.periodic();
+
+        Pose2d pose = drivetrain.getPose();
+        assertEquals(2.0, pose.getX(), 0.01);
+        assertEquals(0.0, pose.getY(), 0.01);
+    }
+
+    @Test
+    void resetPoseSeedsOdometryAndZeroesEncoders() {
+        Pose2d seededPose = new Pose2d(5.0, 1.0, Rotation2d.fromDegrees(90));
+        drivetrain.resetPose(seededPose);
+
+        assertEquals(0.0, drivetrain.getLeftDistanceMeters());
+        assertEquals(0.0, drivetrain.getRightDistanceMeters());
+        Pose2d pose = drivetrain.getPose();
+        assertEquals(5.0, pose.getX(), 0.01);
+        assertEquals(1.0, pose.getY(), 0.01);
+        assertEquals(90.0, pose.getRotation().getDegrees(), 0.5);
+    }
+
+    @Test
+    void chassisSpeedsZeroWhenStopped() {
+        var speeds = drivetrain.getChassisSpeeds();
+        assertEquals(0.0, speeds.vxMetersPerSecond, 1e-6);
+        assertEquals(0.0, speeds.omegaRadiansPerSecond, 1e-6);
     }
 }
