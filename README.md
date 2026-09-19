@@ -36,7 +36,11 @@ earlier Java branch did, and it's worth reading before trusting anything in
 **Still not compiled, run, or tested** -- same sandboxed session, same network policy
 blocking `frcmaven.wpi.edu` and the REVLib/CTRE/Studica/PhotonVision Maven hosts. See
 `teaching-bot-poc-java`'s README for the full explanation; everything there applies
-here too.
+here too, including that branch's own `Robot.java` fix -- this branch inherited
+`Robot.java` unchanged, so the same build-breaking bug (extending a nonexistent
+`TimedCommandRobot` class instead of `TimedRobot`, with no `robotPeriodic()`
+override to call the scheduler) was present here too, and has now been fixed here
+the same way.
 
 **This branch's one significant, deliberate divergence, disclosed plainly rather than
 hidden:** `subsystems/Vision.java` constructs its `PhotonPoseEstimator` with a 2-arg
@@ -68,6 +72,36 @@ to confirm this branch's usage against them line by line -- these are not a
 divergence, just the same "verify before trusting" discipline every earlier branch's
 README already describes.
 
+**Two smaller gaps found during a dedicated post-hoc code-review pass, worth naming
+rather than smoothing over:**
+
+- `DriveTrain.resetPose()` calls `resetEncoders()` before seeding the pose estimator
+  with literal `0.0, 0.0` for left/right distance. That's self-consistent (it zeroes
+  the distance, then tells the estimator "you're at zero distance from here"), and
+  it's the exact same pattern this branch inherited unchanged from
+  `teaching-bot-odometry-java`, where it was independently verified as logically
+  sound. But it is NOT the same thing the real competition port's own `resetPose()`
+  does -- that version never resets the hardware encoders, and instead passes the
+  *live* `getLeftDistanceMeters()`/`getRightDistanceMeters()` into `resetPosition()`.
+  The paragraph above, about this branch's pose-estimator API usage being "NOT a
+  deliberate divergence" from the real robot's code, is accurate for the
+  constructor/`update()`/`addVisionMeasurement()`/`getEstimatedPosition()` calls, but
+  overstated as written for `resetPose()` specifically -- that one method's exact
+  behavior is a real, if minor, difference between this teaching project and the
+  competition robot, not a byte-for-byte match.
+- `ApproachTagCommand`'s two bindings in `RobotContainer.java` (driver `a()`/`x()`)
+  have no `.withTimeout(...)`, unlike `FireCommand`'s binding. If the command's
+  internal PID chain never converges (an edge-of-field target, a stalled drivetrain,
+  oscillation), the driver can't preempt it with the default teleop command and loses
+  stick control until it resolves on its own. This is a real, undisclosed-until-now
+  safety gap -- but it is not unique to this Java branch: the already-tested Python
+  sibling's own `robotcontainer.py` binds `ApproachTagCommand` the exact same way,
+  with no timeout either. It's therefore documented here as a shared, cross-language
+  design point rather than patched only on the Java side, which would have silently
+  broken the 1:1 comparison this whole project exists to support. See
+  [Assumptions that need bench verification](#assumptions-that-need-bench-verification)
+  below.
+
 ## What changed from teaching-bot-odometry-java
 
 - **`Constants.java`** gained a `VisionConstants` nested class: camera name, the
@@ -85,7 +119,9 @@ README already describes.
 - **`subsystems/DriveTrain.java`** -- swapped `DifferentialDriveOdometry` for
   `DifferentialDrivePoseEstimator`, added a `Vision` constructor parameter, and folds
   in a fresh vision measurement every loop in `periodic()`. `getPose()`/`resetPose()`
-  keep their exact same names and signatures from the odometry branch.
+  keep their exact same names and signatures from the odometry branch (see
+  [Verification status](#verification-status) above for one caveat on `resetPose()`'s
+  exact behavior).
 - **New file, `commands/ApproachTagCommand.java`** -- this project's one genuinely
   cross-subsystem command. See [ApproachTagCommand](#approachtagcommand) below.
 - **`commands/DriveDistanceCommand.java`** -- fixed a real pose-corruption bug; see
@@ -98,6 +134,8 @@ README already describes.
   regression test added to `subsystems/DriveTrainTest.java` -- see
   [Running tests](#running-tests) below, including two testability wrinkles this
   branch specifically introduces.
+- **`Robot.java`** -- carries the `TimedCommandRobot` -> `TimedRobot` fix described
+  in [Verification status](#verification-status) above; otherwise unchanged.
 
 ## Camera mounting
 
@@ -160,9 +198,10 @@ doesn't need to know or care whether the pose behind them is pure dead reckoning
 vision-fused. This constructor/method pattern (`DifferentialDrivePoseEstimator(kinematics,
 gyroAngle, leftDistance, rightDistance, initialPose)`, `getEstimatedPosition()`,
 `resetPosition(...)`, `addVisionMeasurement(...)`) was cross-checked directly against
-the real competition port's own `DriveTrain.java` -- unlike `Vision.java`'s
-`PhotonPoseEstimator` construction, this part of the design is NOT a deliberate
-divergence; it matches the real robot's own code.
+the real competition port's own `DriveTrain.java` -- with one caveat: see
+[Verification status](#verification-status) above for `resetPose()`'s own specific,
+smaller divergence (it resets the hardware encoders; the competition port's version
+doesn't).
 
 ## How Vision decides a measurement is trustworthy
 
@@ -222,6 +261,10 @@ driverController.x().onTrue(
     )
 );
 ```
+
+Neither binding has a `.withTimeout(...)`, unlike `FireCommand`'s -- see
+[Verification status](#verification-status) above for why that's a real, if shared
+with the Python sibling, gap worth a rookie noticing.
 
 Both are the same command class, parameterized -- **not** two near-duplicate classes
 the way `RaiseElevatorCommand`/`LowerElevatorCommand` are. That's a deliberate
@@ -391,6 +434,16 @@ their definition in `Constants.VisionConstants`:
   numbers measured against this specific camera/lens/coprocessor combination --
   expect to retune all of them once real vision data exists to compare against a
   known ground-truth position.
+- **`ApproachTagCommand` has no `.withTimeout(...)` at either binding** (see
+  [Verification status](#verification-status) above) -- if its internal PID chain
+  never converges, the driver can't preempt it with the default teleop command.
+  This matches the already-tested Python sibling's own bindings exactly, so it's a
+  shared design point across both language ports rather than something introduced
+  here, but it's a real gap worth fixing (in both projects, together, so the
+  comparison stays fair) before this pattern is ever bound on hardware that can
+  actually hurt someone. A reasonable fix: wrap both bindings in
+  `.withTimeout(...)`, the same decorator `FireCommand`'s binding already uses, with
+  a new `VisionConstants` constant for the timeout duration.
 - **The `PhotonPoseEstimator` construction pattern itself** (see
   [Verification status](#verification-status) above) -- worth treating as an open
   question to settle, not just a code style preference, once a real build/test
@@ -399,6 +452,11 @@ their definition in `Constants.VisionConstants`:
   installed `v2026.3.2` PhotonLib Java jar the way they do in `photonlibpy`? If not,
   this file needs to move to the competition port's `PoseStrategy`-based pattern
   instead, and this README's framing of that choice was wrong.
+- **`DriveTrain.resetPose()` resets the hardware encoders; the real competition
+  port's own `resetPose()` doesn't** (see [Verification status](#verification-status)
+  above) -- worth deciding deliberately, not by inertia, whether this teaching
+  project's behavior or the competition robot's is the one worth adopting if this
+  code is ever used as a template for real robot work.
 
 ## Using this as a teaching curriculum
 
