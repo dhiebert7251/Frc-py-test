@@ -1,0 +1,14 @@
+*.class
+
+# gradle
+.gradle/
+build/
+
+# Simulation GUI
+simgui.json
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
