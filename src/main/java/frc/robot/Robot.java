@@ -2,25 +2,35 @@ package frc.robot;
 
 import edu.wpi.first.wpilibj.DataLogManager;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
-import edu.wpi.first.wpilibj2.command.TimedCommandRobot;
 
 /**
  * Entry point for the teaching-bot proof of concept.
  *
- * <p>{@code TimedCommandRobot} does two things a plain {@code TimedRobot} would leave
- * to you: it calls {@code CommandScheduler.getInstance().run()} every loop
- * automatically (Python's {@code commands2.TimedCommandRobot} does the same), and it
- * still gives you the familiar {@code robotInit()}/{@code autonomousInit()}/
- * {@code teleopInit()}/... callback methods to override.
+ * <p><b>Corrected during a post-hoc code-review pass:</b> this class used to extend a
+ * class called {@code TimedCommandRobot}, imported from
+ * {@code edu.wpi.first.wpilibj2.command}. That class does not exist in Java WPILib --
+ * it's a RobotPy-only convenience ({@code commands2.TimedCommandRobot}, in the Python
+ * bindings) that automatically calls {@code CommandScheduler.getInstance().run()}
+ * every loop; there's no Java equivalent that does the same thing implicitly. The
+ * mistake would have failed to compile with "cannot find symbol," and even patched to
+ * compile, nothing would have called the scheduler at all -- autonomous and teleop
+ * commands would never actually run.
+ *
+ * <p>The fix: extend the real {@link TimedRobot} directly, and call the scheduler
+ * explicitly, once, from an overridden {@code robotPeriodic()} below -- exactly what
+ * every WPILib Java command-based robot does, including this team's own real
+ * competition port (whose {@code Robot.java} extends AdvantageKit's
+ * {@code LoggedRobot}, itself a {@code TimedRobot} subclass, and does this same
+ * explicit call).
  *
  * <p>No AdvantageKit, no vision-specific logging (unlike the real competition port's
- * {@code Robot.java}, which extends AdvantageKit's {@code LoggedRobot}) -- just
- * {@link DataLogManager} for on-disk + NetworkTables logging, matching the Python
- * teaching-bot's {@code robot.py} exactly.
+ * {@code Robot.java}) -- just {@link DataLogManager} for on-disk + NetworkTables
+ * logging, matching the Python teaching-bot's {@code robot.py} exactly.
  */
-public class Robot extends TimedCommandRobot {
+public class Robot extends TimedRobot {
     // `Command` (an interface/abstract class) is the TYPE; `m_autonomousCommand` can
     // hold `null` (no autonomous command selected) or any object that implements
     // Command. Python's equivalent used `Optional[Command] = None` as a type hint --
@@ -45,6 +55,20 @@ public class Robot extends TimedCommandRobot {
         DriverStation.startDataLog(DataLogManager.getLog());
 
         m_robotContainer = new RobotContainer();
+    }
+
+    /**
+     * Runs every ~20ms, no matter what mode the robot is in -- this is the one place
+     * {@code CommandScheduler.getInstance().run()} has to be called from. It's what
+     * actually polls button bindings, starts newly-scheduled commands, runs already-
+     * scheduled commands' {@code execute()}, checks {@code isFinished()}, and calls
+     * every registered subsystem's {@code periodic()}. Without this override, nothing
+     * in the command-based framework -- not a single command, not a single
+     * subsystem's {@code periodic()} -- would ever run.
+     */
+    @Override
+    public void robotPeriodic() {
+        CommandScheduler.getInstance().run();
     }
 
     /** This autonomous runs the autonomous command selected by {@link RobotContainer}. */
