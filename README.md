@@ -1,109 +1,267 @@
-# Teaching-Bot (Java): Odometry and Kinematics
+# Teaching-Bot (Java): AprilTag Vision
 
-This is the **Java sibling** of `teaching-bot-odometry` (the Python branch of this
-same repo), which itself builds on `teaching-bot-poc`. This branch builds on
-`teaching-bot-poc-java` the same way: adding `DifferentialDriveKinematics` and
-`DifferentialDriveOdometry` to `DriveTrain`, plus a `Field2d` widget, so the robot
-tracks its estimated (X, Y, heading) position on the field from encoders and the
-gyro alone. Every other design decision -- explicit-class commands, no lambdas, the
-same physical robot -- carries over unchanged from `teaching-bot-poc-java`; see that
+This is the **Java sibling** of `teaching-bot-vision` (the Python branch of this same
+repo), which itself builds on `teaching-bot-odometry`. This branch builds on
+`teaching-bot-odometry-java` the same way: adding one PhotonVision camera doing
+AprilTag pose estimation, fusing its fixes into `DriveTrain`'s pose estimator to
+correct the dead-reckoning drift the odometry branch's README named as its reason for
+existing, and one new cross-subsystem command, `ApproachTagCommand`, built on top of
+that. Every other design decision -- explicit-class commands, no lambdas, the same
+physical robot -- carries over unchanged from `teaching-bot-poc-java`; see that
 branch's README for the full reasoning behind those, and for the general
 Java-vs-Python comparison material this README doesn't repeat.
 
 **Read this before anything else: this project has not been compiled or run.** See
-[Verification status](#verification-status) below.
+[Verification status](#verification-status) below -- this branch has one additional,
+more significant disclosed divergence from the real competition port than either
+earlier Java branch did, and it's worth reading before trusting anything in
+`Vision.java`.
 
 ## Contents
 
 - [Verification status](#verification-status)
-- [What changed from teaching-bot-poc-java](#what-changed-from-teaching-bot-poc-java)
-- [Odometry and kinematics](#odometry-and-kinematics)
+- [What changed from teaching-bot-odometry-java](#what-changed-from-teaching-bot-odometry-java)
+- [Camera mounting](#camera-mounting)
+- [Pose estimation: from odometry to a pose estimator](#pose-estimation-from-odometry-to-a-pose-estimator)
+- [How Vision decides a measurement is trustworthy](#how-vision-decides-a-measurement-is-trustworthy)
+- [ApproachTagCommand](#approachtagcommand)
 - [Running tests](#running-tests)
 - [Building and running this project](#building-and-running-this-project)
 - [Design decisions and deliberate simplifications](#design-decisions-and-deliberate-simplifications)
+- [Assumptions that need bench verification](#assumptions-that-need-bench-verification)
 - [Using this as a teaching curriculum](#using-this-as-a-teaching-curriculum)
 
 ## Verification status
 
 **Still not compiled, run, or tested** -- same sandboxed session, same network policy
-blocking `frcmaven.wpi.edu` and the REVLib/CTRE/Studica Maven hosts. See
+blocking `frcmaven.wpi.edu` and the REVLib/CTRE/Studica/PhotonVision Maven hosts. See
 `teaching-bot-poc-java`'s README for the full explanation; everything there applies
 here too.
 
-**One specific, disclosed uncertainty new to this branch:** `DriveTrain.getPose()`
-below calls `odometry.getPoseMeters()`. WPILib's `DifferentialDriveOdometry` class
-extends a shared generic `Odometry<T>` base class (also used by
-`MecanumDriveOdometry`, `SwerveDriveOdometry`, ...), and `getPoseMeters()` is that
-base class's traditional accessor name across the WPILib seasons this was checked
-against. It could **not** be independently confirmed against the installed 2026
-Java WPILib package the way `DifferentialDrivePoseEstimator`'s API was confirmed
-against the real competition port's actual source (that repo skips plain odometry
-entirely and goes straight to a pose estimator, so there was no real `.java` file to
-cross-check this specific accessor against). The Python sibling's equivalent
-(`self._odometry.getPose()`) was independently verified by actually running its
-tests in this same session, and RobotPy's `wpimath` bindings are generated directly
-from the same WPILib C++ core Java also wraps -- strong circumstantial evidence, not
-proof. **If `./gradlew build` reports a missing/renamed method here, this line is
-the first place to check.**
+**This branch's one significant, deliberate divergence, disclosed plainly rather than
+hidden:** `subsystems/Vision.java` constructs its `PhotonPoseEstimator` with a 2-arg
+constructor (field layout + camera transform, no strategy argument) and calls
+`estimateCoprocMultiTagPose(result)` directly, falling back to
+`estimateLowestAmbiguityPose(result)`. The real competition port's own `Vision.java`
+instead constructs `PhotonPoseEstimator` with an explicit 3rd argument,
+`PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR`, and calls one `poseEstimator.update(result)`
+per camera. Both patterns exist in PhotonLib for the 2026 season. This file uses the
+first pattern because it's the one actually verified end to end in this project's
+Python sibling -- constructed, called, and passed against the real installed
+`photonlibpy==2026.3.4` package earlier in this same overall effort -- while the
+competition port's own pattern, though real production code, was only read, never
+run, in this particular Java session. Evidence that something actually executed
+successfully once beats evidence that something merely compiles by inspection, which
+is why this file mirrors the tested pattern instead of the unverified-here one, even
+though the unverified-here one is what this team's own real robot runs. **If
+`./gradlew build` fails inside `Vision.java`, this constructor call and the two
+`estimate*Pose()` method names are the first place to check** -- see that file's own
+class-level Javadoc for the same explanation in place, right next to the code it's
+about.
 
-## What changed from teaching-bot-poc-java
+Every other API used in this branch's new/changed files (`DifferentialDrivePoseEstimator`'s
+constructor and `addVisionMeasurement()`/`getEstimatedPosition()`/`resetPosition()`,
+`VecBuilder.fill()`, `Transform3d`/`Translation3d`/`Rotation3d`, `AprilTagFieldLayout`/
+`AprilTagFields`) WAS cross-checked directly against the real competition port's own
+`DriveTrain.java` and `Constants.java`, fetched and read in this session specifically
+to confirm this branch's usage against them line by line -- these are not a
+divergence, just the same "verify before trusting" discipline every earlier branch's
+README already describes.
 
-Only `subsystems/DriveTrain.java` and `src/test/java/frc/robot/subsystems/DriveTrainTest.java`:
+## What changed from teaching-bot-odometry-java
 
-- Two new fields: `DifferentialDriveKinematics kinematics` and
-  `DifferentialDriveOdometry odometry`, plus a `Field2d field` widget.
-- `odometry` is assigned in the **constructor body**, not inline at its field
-  declaration -- see that constructor's doc comment for why (it needs
-  `configureMotors()` to have already zeroed the encoders first, and Java runs field
-  initializers and constructor-body statements in the order they're written).
-- Four new public methods: `getWheelSpeeds()`, `getChassisSpeeds()`, `getPose()`,
-  `resetPose(Pose2d)`.
-- `periodic()` now calls `odometry.update(...)` every loop and
-  `field.setRobotPose(getPose())`, plus two new dashboard keys,
-  `DriveTrain/PoseXFeet`/`PoseYFeet`.
-- Four new tests in `DriveTrainTest.java`: `poseStartsAtOrigin`,
-  `odometryTracksStraightLineDriving`, `resetPoseSeedsOdometryAndZeroesEncoders`,
-  `chassisSpeedsZeroWhenStopped` -- Java translations of the four the Python sibling
-  added for the same reason.
+- **`Constants.java`** gained a `VisionConstants` nested class: camera name, the
+  robot-to-camera mounting transform, vision quality-gating thresholds, the three
+  standard-deviation matrices, and the two example `ApproachTagCommand` bindings'
+  numbers (tag ID, standoff distances, turn offset).
+- **New file, `VisionMeasurement.java`** -- a `record` bundling one vision pose fix
+  (`estimatedPose`, `timestampSeconds`, `standardDeviations`, `numTagsUsed`). See that
+  file's own Javadoc for why `record` is the right tool here, and how it compares to
+  Python's `@dataclass(frozen=True)`.
+- **New file, `subsystems/Vision.java`** -- the new subsystem. See
+  [Pose estimation](#pose-estimation-from-odometry-to-a-pose-estimator) and
+  [How Vision decides a measurement is trustworthy](#how-vision-decides-a-measurement-is-trustworthy)
+  below.
+- **`subsystems/DriveTrain.java`** -- swapped `DifferentialDriveOdometry` for
+  `DifferentialDrivePoseEstimator`, added a `Vision` constructor parameter, and folds
+  in a fresh vision measurement every loop in `periodic()`. `getPose()`/`resetPose()`
+  keep their exact same names and signatures from the odometry branch.
+- **New file, `commands/ApproachTagCommand.java`** -- this project's one genuinely
+  cross-subsystem command. See [ApproachTagCommand](#approachtagcommand) below.
+- **`commands/DriveDistanceCommand.java`** -- fixed a real pose-corruption bug; see
+  [Design decisions](#design-decisions-and-deliberate-simplifications) below.
+- **`RobotContainer.java`** -- constructs `Vision` (before `DriveTrain`, which needs
+  it), and binds `ApproachTagCommand` twice to the driver's A/X buttons.
+- **New vendor dependency, `vendordeps/photonlib.json`** -- copied verbatim from the
+  real competition port's own copy (`v2026.3.2`).
+- **New tests:** `VisionTest.java`, `commands/ApproachTagCommandTest.java`, and one
+  regression test added to `subsystems/DriveTrainTest.java` -- see
+  [Running tests](#running-tests) below, including two testability wrinkles this
+  branch specifically introduces.
 
-Nothing else in the project (`Constants.java`, every command, every other
-subsystem, `RobotContainer.java`, autonomous) changed at all.
+## Camera mounting
 
-## Odometry and kinematics
+`Constants.VisionConstants.ROBOT_TO_CAMERA` encodes the camera's physical mounting as
+a `Transform3d` from the robot's center to the camera lens -- exactly the numbers
+given for this robot: centered left/right, 3 inches back from the front of the frame,
+1 foot above the floor, angled 15 degrees upward.
 
-`DriveTrain` now tracks the robot's estimated position on the field as a `Pose2d`
-(X meters, Y meters, heading), via two new pieces added in the constructor:
+```java
+public static final Transform3d ROBOT_TO_CAMERA = new Transform3d(
+    new Translation3d((16.0 - 3.0) * 0.0254, 0.0, 1.0 * 0.3048),
+    new Rotation3d(0.0, Math.toRadians(-15.0), 0.0)
+);
+```
 
-- **`DifferentialDriveKinematics(TRACK_WIDTH_METERS)`** -- the math relating each
-  wheel's own speed to the whole robot's forward speed and turn rate (a
-  `ChassisSpeeds`). It needs only the track width because, for a tank drive, that's
-  the only geometry that matters: how far apart the wheels are determines how fast
-  the robot turns for a given difference between the two sides' speeds.
-  `getChassisSpeeds()` exposes this; nothing in this project currently drives from
-  it, but it's the natural building block for anything that needs "how fast is the
-  whole robot going" rather than "how fast is each wheel going."
-- **`DifferentialDriveOdometry`** -- the part that actually accumulates position
-  <i>over time</i>. Every loop, `periodic()` feeds it the current gyro heading and
-  both encoder distances, and it integrates those into a running pose estimate --
-  dead reckoning, the same technique ships have used for centuries: no outside
-  reference, just "I know my heading and how far each wheel has turned, so here's
-  where I must be now." `getPose()` reads that estimate; `resetPose()` seeds it with
-  a known starting position (and, since odometry measures distance <i>since the
-  last reset</i>, zeroes the encoders at the same time -- doing one without the
-  other would make the two disagree about where "zero" is).
+Two things worth explaining, since both are easy to get backwards:
 
-A `Field2d` widget, registered once in the constructor and updated every loop in
-`periodic()`, draws this estimated pose on a picture of the field in
-Shuffleboard/Glass.
+- **"3 inches from the front of the frame" isn't the same number as "3 inches
+  forward of center."** The frame is 32 inches front-to-back, so its center is 16
+  inches back from the front edge. A camera 3 inches back from the front edge is
+  therefore `16 - 3 = 13` inches forward of the robot's own center -- `Transform3d`,
+  like everything else in `wpimath`, measures from the robot's origin (its center),
+  not from any particular edge of the frame. Left/right offset is 0 because the
+  camera is centered; height is a straight foot-to-meter conversion since
+  `Translation3d`'s Z axis is already "up" from the floor.
+- **Negative pitch tilts the camera up, not down.** `Rotation3d`'s pitch convention
+  is easy to get backwards by guessing. This exact sign convention WAS verified
+  directly, but against the Python sibling's installed `wpimath` package, not this
+  branch's own Java one (see [Verification status](#verification-status) above for
+  why that gap exists in this session): rotating a "straight ahead" translation by
+  `Rotation3d(0, pitch, 0)` gave a negative pitch a positive Z component (tilted up).
+  Java and Python `wpimath` share the same underlying C++ geometry implementation, so
+  this convention should carry over unchanged -- but "should," not "was independently
+  confirmed here," is the honest way to describe it. Worth a rookie re-running that
+  same one-line experiment in Java once a build environment exists, rather than
+  taking this comment on faith -- that's the whole point of writing it down as a
+  claim someone can check, instead of a fact.
 
-**Dead reckoning drifts.** Nothing corrects this pose against reality -- a
-slightly-off track-width measurement, wheel scrub while turning, or a wheel briefly
-losing traction all introduce small errors that accumulate the longer the robot
-drives without a reset. That's not a bug to fix here; it's <i>the</i> reason
-vision-based correction is worth learning next, on `teaching-bot-vision-java`, which
-fuses AprilTag detections back into this same pose to correct that drift instead of
-trusting dead reckoning alone for an entire match -- identical framing to the
-Python sibling's own README at this exact point in its lineage.
+## Pose estimation: from odometry to a pose estimator
+
+`DriveTrain` swapped its plain `DifferentialDriveOdometry` (the odometry branch) for a
+`DifferentialDrivePoseEstimator`. The two take the same encoder/gyro inputs every
+loop, but the pose estimator also accepts vision fixes via
+`addVisionMeasurement(pose, timestampSeconds, stdDevs)`, and internally runs a Kalman
+filter that blends a vision fix in proportionally to how confident it is (smaller
+`stdDevs` = more trusted = pulled toward harder), rather than either ignoring vision
+or snapping straight to it. Every loop, `DriveTrain.periodic()` asks `Vision` for its
+best fresh measurement and, if there is one, feeds it in:
+
+```java
+Optional<VisionMeasurement> measurement = vision.getBestVisionMeasurementIfFresh();
+measurement.ifPresent(m ->
+    poseEstimator.addVisionMeasurement(m.estimatedPose(), m.timestampSeconds(), m.standardDeviations())
+);
+```
+
+`getPose()` and `resetPose()` keep their exact same names and signatures from the
+odometry branch -- a caller elsewhere in the codebase (like `ApproachTagCommand`)
+doesn't need to know or care whether the pose behind them is pure dead reckoning or
+vision-fused. This constructor/method pattern (`DifferentialDrivePoseEstimator(kinematics,
+gyroAngle, leftDistance, rightDistance, initialPose)`, `getEstimatedPosition()`,
+`resetPosition(...)`, `addVisionMeasurement(...)`) was cross-checked directly against
+the real competition port's own `DriveTrain.java` -- unlike `Vision.java`'s
+`PhotonPoseEstimator` construction, this part of the design is NOT a deliberate
+divergence; it matches the real robot's own code.
+
+## How Vision decides a measurement is trustworthy
+
+`subsystems/Vision.java`'s `computeMeasurement()` runs several checks before a camera
+result becomes something `DriveTrain` is allowed to fuse in, each one guarding
+against a specific, real failure mode rather than being defensive for its own sake:
+
+- **No targets, no estimate.** `PhotonPoseEstimator` is asked for a multi-tag
+  estimate first (`estimateCoprocMultiTagPose()`), falling back to a
+  lowest-ambiguity single-tag estimate (`estimateLowestAmbiguityPose()`) when
+  multi-tag PNP data isn't available -- see
+  [Verification status](#verification-status) above for why this specific pair of
+  method names is this branch's one flagged divergence from the real competition
+  port's code.
+- **A pose off the field is never real.** If the estimated X/Y falls outside the
+  field's own dimensions (from the same `AprilTagFieldLayout` used to look up tag
+  positions), it's thrown out -- a bad reprojection producing a robot "10 meters past
+  the wall" is a sign of a bad estimate, not a real robot position.
+- **A single ambiguous tag is untrustworthy.** One AprilTag alone is a genuinely
+  ambiguous pose problem -- the same tag corners are consistent with two different
+  camera poses, mirrored through the tag's plane. PhotonVision's own
+  `getPoseAmbiguity()` score flags when that ambiguity is high; above
+  `VisionConstants.MAX_AMBIGUITY`, the whole measurement is dropped rather than
+  trusted.
+- **Confidence (`stdDevs`) scales with how the estimate was made.** Multiple tags in
+  view resolve that ambiguity geometrically, so `MULTI_TAG_STDDEVS` (tightest)
+  applies whenever at least `VisionConstants.MIN_TAGS_FOR_MULTI_TAG` tags
+  contributed. A single tag gets looser trust, and looser still
+  (`SINGLE_TAG_FAR_STDDEVS` vs. `SINGLE_TAG_CLOSE_STDDEVS`) the farther away it is --
+  distance amplifies any small pixel-level error in the corner detection into a
+  larger real-world position error. A single tag farther than
+  `VisionConstants.MAX_TAG_DISTANCE_METERS` is dropped outright rather than trusted
+  at any confidence.
+- **Staleness matters for both fusion and `isAnyVisionAvailable()`.**
+  `getBestVisionMeasurementIfFresh()` refuses to hand back a measurement older than
+  `VisionConstants.MAX_VISION_AGE_SECONDS` -- a processing delay or a dropped frame
+  shouldn't let `DriveTrain` fuse in a pose fix that was accurate a moment ago but
+  describes where the robot *was*, not where it *is*. `isAnyVisionAvailable()`
+  answers a different, looser question ("has the camera sent anything recently at
+  all") used only for dashboard telemetry, not for anything safety- or
+  accuracy-critical.
+
+## ApproachTagCommand
+
+`commands/ApproachTagCommand.java` is bound twice in `RobotContainer.java`, once per
+requested behavior, both against the same example tag ID
+(`VisionConstants.EXAMPLE_TAG_ID = 15`):
+
+```java
+driverController.a().onTrue(
+    new ApproachTagCommand(drivetrain, vision, EXAMPLE_TAG_ID, APPROACH_STANDOFF_FEET)
+);
+driverController.x().onTrue(
+    new ApproachTagCommand(
+        drivetrain, vision, EXAMPLE_TAG_ID,
+        APPROACH_AND_TURN_STANDOFF_FEET, APPROACH_AND_TURN_OFFSET_DEGREES
+    )
+);
+```
+
+Both are the same command class, parameterized -- **not** two near-duplicate classes
+the way `RaiseElevatorCommand`/`LowerElevatorCommand` are. That's a deliberate
+exception to this project's usual "each distinct behavior gets its own named class"
+convention, made because these two behaviors share the entire 3-phase state machine
+below and differ by exactly one number (`faceOffsetDegrees`, defaulted to `0.0` via a
+second, shorter constructor overload -- Java has no default-parameter-value syntax
+the way Python's `face_offset_degrees: float = 0.0` does, so an overload is the
+idiomatic Java equivalent). Two copies of that state machine would mean any future
+bugfix to the turn/drive/turn sequence has to be applied twice and could silently
+drift apart; one parameterized class can't drift from itself.
+
+The command runs as three phases, tracked by a private nested `enum Phase` (package-
+private in this file specifically for testability -- see
+[Running tests](#running-tests) below), each one a fresh PID setpoint on top of
+`DriveTrain`'s existing turn/distance PID gains (no separate gains were tuned for
+vision navigation -- see
+[Assumptions that need bench verification](#assumptions-that-need-bench-verification)):
+
+1. **`TURN_TO_TARGET`** -- `initialize()` looks up the tag's known field pose via
+   `vision.getTagPose(tagId)` (a plain field-layout lookup, independent of whether
+   the camera can currently see that tag), computes a target point `standoffFeet` in
+   front of the tag along the direction the tag itself faces, and turns the robot to
+   face that point.
+2. **`DRIVE_TO_TARGET`** -- drives straight to that point, using the same
+   relative-baseline distance pattern as `DriveDistanceCommand` (see
+   [Design decisions](#design-decisions-and-deliberate-simplifications) below for why
+   that pattern matters here specifically).
+3. **`FACE_TAG`** -- turns to a final heading: facing the tag directly when
+   `faceOffsetDegrees` is 0, or offset from that by the given number of degrees
+   otherwise. The command finishes once this final turn reaches its setpoint.
+
+If the tag ID doesn't exist in the field layout, `initialize()` sets an internal
+`FAILED` phase and the command ends immediately -- it doesn't throw, hang, or drive
+toward a nonexistent point.
+
+`ApproachTagCommand`'s constructor calls `addRequirements(drivetrain)` and NOT
+`vision` -- it only ever reads from `Vision`, never commands it, and
+`addRequirements()` is for preventing two commands from fighting over something they
+both *drive*.
 
 ## Running tests
 
@@ -111,14 +269,41 @@ Python sibling's own README at this exact point in its lineage.
 ./gradlew test
 ```
 
-`subsystems/DriveTrainTest.java` gained four tests over the poc-java branch's
-version -- see [What changed](#what-changed-from-teaching-bot-poc-java) above.
-`odometryTracksStraightLineDriving` calls `drivetrain.periodic()` directly rather
-than stepping the scheduler, matching the Python sibling's pattern exactly (see that
-branch's own README for why its version needs to do this to dodge a physics-engine
-race -- this branch has no physics engine to race, so the direct call here is really
-just for one deterministic update from a known sensor state, not a workaround for
-anything).
+New in this branch: `VisionTest.java`, `commands/ApproachTagCommandTest.java`, and
+one regression test added to `subsystems/DriveTrainTest.java`
+(`driveDistanceCommandDoesNotCorruptPoseBetweenLegs`, a Java translation of the
+Python sibling's own regression test for the bug described in
+[Design decisions](#design-decisions-and-deliberate-simplifications) below).
+
+**A second package-private-for-testability exception, and why one exception led to
+another.** `DriveTrainTest.java` already needed `DriveTrain.leftEncoder`/
+`rightEncoder` to be package-private instead of `private` (see
+`teaching-bot-poc-java`'s README for the original reasoning) so a same-package test
+could poke simulated encoder position directly. `ApproachTagCommand.java` needed the
+same kind of access for its own internal `phase`/`targetPoint`/`turnPid`/`drivePid`
+fields, so `ApproachTagCommandTest.java` can check the command's state-machine
+progress the same way the Python sibling's test reaches its `_phase`/`_target_point`/
+`_turn_pid`/`_drive_pid` past Python's naming-convention-only privacy. That test
+therefore has to live in `frc.robot.commands` (where `ApproachTagCommand` itself
+lives) -- but it *also* needs to poke `DriveTrain`'s encoders to fake a driven
+distance mid-test, and package-private access never spans two different packages no
+matter how either side is declared: a test can be a member of `frc.robot.commands` or
+`frc.robot.subsystems`, never both at once. Rather than force one package-private
+trick to do a job it structurally cannot, `DriveTrain` gained one small, honestly
+named `public` method, `setEncoderPositionsForTest(double, double)`, whose Javadoc
+says exactly what it's for and why it exists. Three real lessons in one small corner
+of this codebase: Java's `private` is enforced in a way Python's naming convention
+never is; package-private is the standard fix for a same-package test that needs
+past that enforcement; and package-private has a hard structural limit -- once a
+test's need spans two different production packages, a plain `public` method,
+clearly labeled, is the more honest tool than trying to bend visibility rules to fit.
+
+Everything else about running these tests -- no bundled fixture equivalent to
+pyfrc's `robot`/`control`, `HAL.initialize()`/`DriverStationSim`/`SimHooks` used
+explicitly in every file's `@BeforeEach`, no physics simulation wired into this
+project's Gradle build so nothing overwrites a poked sensor value on its own -- is
+unchanged from `teaching-bot-poc-java`'s README; see that file for the full
+explanation.
 
 ## Building and running this project
 
@@ -130,25 +315,120 @@ Identical to `teaching-bot-poc-java` -- see that branch's README for the
 ./gradlew simulateJava   # run in WPILib's desktop simulator
 ```
 
+**The camera is not modeled in simulation.** There's no simulated PhotonVision
+camera feed wired into this project (`VisionSystemSim`, a real PhotonLib class for
+exactly this, isn't set up here) -- `PhotonCamera.getLatestResult()` returns an
+empty, disconnected-camera result under `./gradlew test` or `simulateJava` alike, the
+same placeholder behavior `Vision.java`'s own comments describe. `ApproachTagCommand`
+will therefore fail immediately (its `FAILED` phase) in simulation unless the tag
+pose lookup itself is exercised directly (`vision.getTagPose(...)`, which doesn't
+need a camera at all) -- driving the full command end-to-end needs either real
+camera hardware or a hand-written test that pokes `Vision`'s state the way
+`ApproachTagCommandTest.java` does.
+
 ## Design decisions and deliberate simplifications
 
-Identical to `teaching-bot-poc-java`'s list, plus one addition specific to this
+Identical list to `teaching-bot-poc-java`'s, plus these additions specific to this
 branch:
 
-- **Odometry added on its own, before vision, as a separate branch** -- not because
-  Java needed it split up any differently than Python did, but because the same
-  pedagogical argument applies in both languages: dead reckoning and vision
-  correction are two separable ideas worth understanding one at a time. See
-  [Odometry and kinematics](#odometry-and-kinematics) above.
+- **Odometry, then vision-fused pose estimation, as two separate branches instead of
+  one.** The real competition port's `DriveTrain` fuses encoders, gyro, AND vision
+  into a `DifferentialDrivePoseEstimator` from day one. This project deliberately
+  split that into `teaching-bot-odometry-java` (encoder/gyro dead reckoning alone)
+  and this branch (which upgrades that to a `DifferentialDrivePoseEstimator` fusing
+  in AprilTag fixes) -- because dead reckoning and vision correction are two
+  separable ideas worth understanding one at a time, and a rookie who can already
+  explain *why* dead reckoning drifts gets far more out of learning what vision
+  fixes than one meeting both ideas simultaneously.
+- **`DriveDistanceCommand` used to reset the encoders every time it ran -- now it
+  doesn't, and that fix mattered for a reason that didn't exist before this project
+  had odometry.** Resetting the hardware encoders to zero at the start of every
+  distance-drive was harmless back when nothing else cared about the encoders'
+  absolute reading. Once `DriveTrain` started computing its pose from those same
+  encoders every loop, an external reset mid-match silently corrupted the pose
+  estimate -- the pose estimator has no way to know a reset happened out from under
+  it, so it would compute a wrong, sudden "jump" in position on the very next loop.
+  The fix (in both `DriveDistanceCommand` and `ApproachTagCommand`'s drive phase) is
+  to capture the *current* distance as a baseline in `initialize()` and measure
+  progress relative to that baseline, without ever touching the actual hardware
+  encoder. `DriveTrainTest.java`'s `driveDistanceCommandDoesNotCorruptPoseBetweenLegs()`
+  is a regression test for exactly this. Worth asking a rookie: what other commands
+  in this codebase read a sensor that something else also depends on, and would have
+  the same class of bug if they ever called a `reset*()` method on it?
+- **`ApproachTagCommand` is one parameterized class, not two, breaking this project's
+  usual one-class-per-behavior convention on purpose.** See
+  [ApproachTagCommand](#approachtagcommand) above for the full reasoning.
+- **A `private enum Phase` became package-private for the same testability reason
+  DriveTrain's encoders did, and that need cascaded into DriveTrain gaining a new
+  `public` test-only method.** See [Running tests](#running-tests) above -- worth
+  reading end to end as one example of how a single design choice (package-private
+  test access) can run into a hard structural limit (it can't span two packages) and
+  need a second, different kind of fix.
+
+## Assumptions that need bench verification
+
+Identical set to `teaching-bot-poc-java`'s (motor inversions, limit-switch/beam-break
+polarity, every PID gain, the shooter's gear ratio), plus these, all marked `TODO` at
+their definition in `Constants.VisionConstants`:
+
+- `CAMERA_NAME = "Front_Camera"` -- must match whatever name the camera is actually
+  configured with in the PhotonVision coprocessor web UI; a mismatch here means
+  `PhotonCamera` silently never finds a live camera, since the constructor doesn't
+  fail on an unknown name.
+- The camera's mounting measurements themselves (3 inches back from the front, 1
+  foot up, 15 degrees up, centered left/right) came from the task description, not a
+  tape measure on an actual robot -- `ROBOT_TO_CAMERA` should be re-measured against
+  the real mount once one exists, since even a small mounting error compounds into a
+  real pose error at range (see [Camera mounting](#camera-mounting) above).
+- `ApproachTagCommand` reuses `DriveTrainConstants`' existing turn/distance PID gains
+  rather than its own -- those gains were themselves only starting points, and
+  driving toward a vision-derived target point may want tighter or looser tolerances
+  than driving a human-specified distance/heading in autonomous. Not split out into
+  separate constants yet because there's no bench data yet to justify different
+  numbers.
+- `MAX_TAG_DISTANCE_METERS`, `MAX_AMBIGUITY`, and the three `*_STDDEVS` matrices are
+  reasonable-sounding starting points for a PhotonVision AprilTag pipeline, not
+  numbers measured against this specific camera/lens/coprocessor combination --
+  expect to retune all of them once real vision data exists to compare against a
+  known ground-truth position.
+- **The `PhotonPoseEstimator` construction pattern itself** (see
+  [Verification status](#verification-status) above) -- worth treating as an open
+  question to settle, not just a code style preference, once a real build/test
+  environment exists: does `estimateCoprocMultiTagPose()`/
+  `estimateLowestAmbiguityPose()` actually exist with those exact names in the
+  installed `v2026.3.2` PhotonLib Java jar the way they do in `photonlibpy`? If not,
+  this file needs to move to the competition port's `PoseStrategy`-based pattern
+  instead, and this README's framing of that choice was wrong.
 
 ## Using this as a teaching curriculum
 
-Same reading order as `teaching-bot-poc-java`, with `DriveTrain.java` (now the
-longest file in the project) read once more at the end specifically for its
-constructor's field-initialization-order comment and the odometry section above --
-a good moment to ask a rookie: what would go wrong if `odometry`'s field declaration
-tried to call `getHeadingDegrees()` inline, the same way `kinematics`'s declaration
-calls `TRACK_WIDTH_METERS` inline? (Answer: nothing stops that syntactically, but
-the encoders wouldn't be zeroed yet, since `configureMotors()` hasn't run -- Java
-initializes fields in declaration order, and `configureMotors()` is only called
-later, in the constructor body.)
+Same reading order as `teaching-bot-odometry-java`, with two files added at the end:
+
+7. **`subsystems/Vision.java`** + **`commands/ApproachTagCommand.java`** -- the
+   newest material, and the first genuinely cross-subsystem command in the codebase.
+   Read this only after `DriveTrain.java`, since `ApproachTagCommand` builds directly
+   on `DriveTrain`'s pose estimate and its existing PID gains. Good discussion
+   questions: why does `ApproachTagCommand` call `addRequirements(drivetrain)` but
+   not `vision`? Why is it one parameterized class instead of two? What happens if
+   the tag ID passed in doesn't exist on the field? And, specific to this branch:
+   why couldn't `DriveTrainTest.java`'s package-private trick be reused as-is for
+   `ApproachTagCommandTest.java` -- what's actually different about the two
+   situations?
+8. **Compare `commands/ApproachTagCommand.java` against
+   `commands/vision_commands.py`'s `ApproachTagCommand` side by side.** Nearly every
+   line has a direct counterpart -- `Translation2d.plus()`/`.minus()`/`.rotateBy()`
+   in Java vs. Python's operator-overloaded `+`/`-`/`.rotateBy()` is one of the few
+   genuinely new syntactic differences this branch introduces that the earlier two
+   Java branches' READMEs didn't already cover (Java has no operator overloading at
+   all, so every `+`/`-` on a `Translation2d` in the Python file becomes an explicit
+   `.plus(...)`/`.minus(...)` method call here) -- worth its own line in
+   `teaching-bot-poc-java`'s "Java vs. Python, line by line" table if that table
+   ever gets extended.
+
+Two mentors already know both languages by this point in the curriculum; the value
+of finishing this branch specifically is seeing how the SAME real bug
+(`DriveDistanceCommand` corrupting pose by resetting encoders it no longer owns
+exclusively) and the SAME real design tension (one parameterized command vs. two)
+were found and resolved identically in both languages, once each codebase reached
+the same point in its own development -- good evidence that these are lessons about
+robot software design, not lessons about either language specifically.

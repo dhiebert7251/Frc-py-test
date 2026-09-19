@@ -186,4 +186,31 @@ class DriveTrainTest {
         assertEquals(0.0, speeds.vxMetersPerSecond, 1e-6);
         assertEquals(0.0, speeds.omegaRadiansPerSecond, 1e-6);
     }
+
+    @Test
+    void driveDistanceCommandDoesNotCorruptPoseBetweenLegs() {
+        DriveDistanceCommand firstLeg = new DriveDistanceCommand(drivetrain, 1.0); // 1 foot
+        firstLeg.initialize();
+
+        // Simulate having actually driven 1 foot for this leg.
+        double drivenMeters = 1.0 * Constants.METERS_PER_FOOT;
+        drivetrain.leftEncoder.setPosition(drivenMeters);
+        drivetrain.rightEncoder.setPosition(drivenMeters);
+        drivetrain.periodic();
+
+        Pose2d poseAfterLegOne = drivetrain.getPose();
+        assertEquals(drivenMeters, poseAfterLegOne.getX(), 0.001);
+
+        // Starting a second DriveDistanceCommand -- exactly what
+        // AutoRoutines.driveTurnDrive() does for its second leg -- used to call
+        // drivetrain.resetEncoders(), which snapped the tracked pose back toward
+        // the origin (see DriveDistanceCommand.initialize()'s doc comment for why).
+        // It should now leave the pose exactly where it was.
+        DriveDistanceCommand secondLeg = new DriveDistanceCommand(drivetrain, 1.0);
+        secondLeg.initialize();
+        drivetrain.periodic();
+
+        Pose2d poseAfterSecondLegStarts = drivetrain.getPose();
+        assertEquals(drivenMeters, poseAfterSecondLegStarts.getX(), 0.001);
+    }
 }
